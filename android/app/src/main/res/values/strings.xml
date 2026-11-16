@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MOS</string>
+    <string name="service_label">MOS agent</string>
+    <string name="service_description">Lets the MOS agent read the screen and tap, swipe and type for you while a task runs. Screens are sent only to the MOS server you set in the app. The agent asks before sending, paying or deleting, and you can stop it any time from the overlay.</string>
+</resources>

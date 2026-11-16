@@ -1,76 +1,112 @@
-# MOS agent: a minimal mobile computer-use agent
+# MOS: a phone agent for you and your friends
 
-Claude drives an Android phone or emulator over ADB. Each step it sees the screen,
-picks one action (tap, swipe, type, key, open app), and then sees the result.
-It is small on purpose (about 500 lines) so it's easy to change and measure.
+An open-weight model (MAI-UI-8B) on a home GPU drives Android phones. Each phone
+runs the MOS app, which uses Android's accessibility APIs to send its screen to the
+server and carry out the actions the server sends back: taps, swipes, typing,
+opening apps. The agent asks before anything that looks like sending, paying or
+deleting, and the overlay has a Stop button.
 
-## Setup (about 15 minutes)
-
-1. Install Android Studio, then in **Device Manager** create a Pixel emulator
-   (API 34 or newer, a "Google APIs" image). Start it.
-2. Check that ADB sees it: `adb devices` should list `emulator-5554`.
-3. Install the Python deps and set your key:
-   ```bash
-   pip install -r requirements.txt
-   export ANTHROPIC_API_KEY=...     # or `ant auth login`
-   ```
-4. Optional but recommended: save a clean emulator snapshot named `clean`
-   (Extended controls → Snapshots) so eval runs start from the same state.
-
-A real phone works too: turn on Developer options → USB debugging, plug it in,
-and accept the prompt. Use an emulator until you trust it.
-
-## Run
-
-```bash
-python -m mos "Create a calendar event tomorrow at 3 PM titled Dentist"
-python -m mos "Turn on dark theme" --mode screenshot   # pixels only
-python -m mos "Set an alarm for 7:30" --mode som       # boxes + ids drawn on the screenshot
+```
+ phone (MOS app)                         home server
+ ───────────────                         ───────────
+ screenshot + UI tree  ── Tailscale ──▶  mos.server (FastAPI) ──▶ vLLM: MAI-UI-8B
+ tap / swipe / type    ◀──────────────   next action + "ask first?" check
 ```
 
-Each run saves every screenshot and a `trajectory.jsonl` (action, reason, latency,
-result, token usage) under `runs/<timestamp>/`.
-
-Actions the model marks as irreversible (send, pay, delete, post) stop and ask you
-first. `--yes` skips that, so only use it on an emulator.
-
-## Perception modes (the main research knob)
-
-| mode | model gets | target by |
+| Part | Where | What it does |
 |---|---|---|
-| `screenshot` | resized screenshot | image pixel coordinates (mapped back to the device) |
-| `tree` | accessibility element list only | element id |
-| `both` (default) | screenshot + element list | element id, or device coordinates |
-| `som` | screenshot with numbered boxes + list | element id |
+| `mos/server.py` | home server | Sessions, MAI-UI prompting, maps 0-999 coords to pixels, safety check, logs every run |
+| `mos/maiui.py` | home server | MAI-UI prompt and output format, matching the official agent |
+| `mos/safety.py` | home server | Flags taps on Send/Pay/Delete-like buttons, typing into password fields, card numbers |
+| `android/` | phones | The app: accessibility service (screen, UI tree, gestures, text, keys), overlay, settings |
+| `mos/remote.py` | your laptop | Same protocol as the app, but over ADB. Use it to test on the emulator |
+| `mos/export_sft.py` | home server | Turns successful runs into fine-tuning data (Tier 1) |
+| `mos/agent.py` | anywhere | The original Claude-driven agent, kept as a baseline |
 
-Compare them with the eval runner:
+## 1. Home server (GPU box)
+
+You need an NVIDIA GPU with 24 GB (e.g. a used RTX 3090). MAI-UI-8B in bf16 is about 17 GB.
 
 ```bash
-python -m evals.run_evals --modes screenshot tree both som --repeats 3
+# the model, served with an OpenAI-compatible API (MAI-UI's instructions pin vLLM 0.11.0)
+pip install vllm==0.11.0 "transformers>=4.57.0"
+python -m vllm.entrypoints.openai.api_server --model Tongyi-MAI/MAI-UI-8B \
+  --served-model-name MAI-UI-8B --host 127.0.0.1 --port 8000 \
+  --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code
+
+# the MOS server, in this repo
+pip install -r requirements.txt
+export MOS_TOKEN=$(openssl rand -hex 16)     # give this to each phone
+MOS_LLM_URL=http://127.0.0.1:8000/v1 uvicorn mos.server:app --host 0.0.0.0 --port 8080
 ```
 
-Tasks live in `evals/tasks.jsonl`. Each one is scored by an `adb shell` check on
-the device's real state, not by what the agent says it did. Add your own tasks there.
+Install [Tailscale](https://tailscale.com) on the server and every phone, and share the
+server with friends from the Tailscale admin page. Phones then use
+`http://<server's 100.x tailscale IP>:8080`. Don't expose port 8080 to the internet.
 
-## Layout
+Settings (env vars): `MOS_TOKEN` (required), `MOS_LLM_URL`, `MOS_LLM_MODEL`,
+`MOS_RUNS` (log folder, default `runs/server`), `MOS_MAX_STEPS` (default 40).
 
+## 2. Try it on the emulator first
+
+With the emulator running (`adb devices` shows it) and the server up:
+
+```bash
+python -m mos.remote "Turn on dark theme" --server http://localhost:8080 --token $MOS_TOKEN
+python -m evals.run_evals --server http://localhost:8080 --token $MOS_TOKEN   # scored by device state
 ```
-mos/device.py    ADB wrapper (screencap, uiautomator dump, input tap/swipe/text/keyevent)
-mos/uitree.py    accessibility XML -> compact numbered element list
-mos/observe.py   builds one observation; resizing, coordinate mapping, set-of-marks
-mos/agent.py     tools, system prompt, the loop, approval gate, logging
-mos/fake.py      fake device for offline tests
-evals/           task suite + runner
-tests/           offline tests (run `pytest`), using a mocked API
+
+`evals/run_evals.py` loads the emulator snapshot named `clean` before each task.
+
+## 3. The phone app
+
+Build it, or download `mos-debug-apk` from the latest CI run on GitHub (Actions tab):
+
+```bash
+cd android && ./gradlew :app:assembleDebug     # needs Android Studio / the Android SDK
+adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## Known limits (good next things to work on)
+On each phone (Android 11 or newer):
 
-- Full history is resent every step, so cost grows with task length. A summary of
-  older steps would fix that.
-- `input text` can't type emoji or most non-ASCII text. An ADB keyboard IME fixes that.
-- Some apps (games, Flutter, WebViews) expose little or no accessibility tree. Those
-  fall back to the screenshot.
-- `uiautomator dump` takes about 1-2 s and fails on screens that are animating.
-  An accessibility-service app on the device would be much faster.
-- Android only. iOS would need XCUITest/Appium, or WebDriverAgent on a simulator.
+1. Install the APK. Allow installing from your file manager or browser when asked.
+2. Open **MOS**, tap **Open accessibility settings**, and turn on **MOS agent**.
+   On Android 13+ a sideloaded app's accessibility toggle is greyed out at first. Go to
+   Settings → Apps → MOS → ⋮ → **Allow restricted settings**, then turn it on.
+3. Back in MOS, enter the server URL and token, type a task, and tap **Run**.
+   MOS moves to the background and a panel at the top shows each step,
+   with **Allow / Deny** when the agent wants to send, pay or delete.
+
+## 4. Getting better on your apps (Tier 1)
+
+Every run is saved under `runs/server/<session>/`. When a task fails, fix the bad
+step's `args` in `steps.jsonl` (or redo the task and keep the good run), mark the
+session successful in `final.json`, then:
+
+```bash
+python -m mos.export_sft runs/server --out data/sft.jsonl
+```
+
+That writes MAI-UI-format samples (`{"messages", "images"}`, the ms-swift /
+LLaMA-Factory multimodal layout) for a QLoRA fine-tune on the same 3090.
+
+## Tests
+
+```bash
+pip install -r requirements.txt && pytest                           # 20 Python tests
+cd android && ./gradlew -Pmos.coreOnly :core:test                   # protocol tests, no Android SDK needed
+```
+
+CI (`.github/workflows/ci.yml`) runs both and builds the APK.
+
+## Known limits
+
+- Accessibility can't capture `FLAG_SECURE` screens (banking, some password fields).
+  They come through black, so the agent can't work inside those apps.
+- `type` replaces the focused field's text with its current text plus the new text.
+  Apps that ignore `ACTION_SET_TEXT` need a keyboard (IME) fallback, which isn't built yet.
+- `menu` maps to Recents, since there is no menu key on modern Android.
+- The safety check is a keyword heuristic on the tapped element. It will miss some
+  risky taps and flag some harmless ones.
+- Only one task runs at a time per phone. The server keeps sessions in memory, so
+  restarting it ends running tasks (their logs stay).

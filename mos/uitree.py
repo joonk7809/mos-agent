@@ -21,6 +21,7 @@ class Element:
     scrollable: bool
     checked: bool | None
     focused: bool
+    password: bool = False
 
     @property
     def center(self) -> tuple[int, int]:
@@ -36,6 +37,12 @@ class Element:
             flags.append("checked" if self.checked else "unchecked")
         cx, cy = self.center
         return f"[{self.id}] {kind} \"{label[:80]}\" @({cx},{cy}) {' '.join(flags)}".rstrip()
+
+    def to_dict(self) -> dict:
+        """The element format phones and the server exchange (see mos/server.py)."""
+        return {"text": self.text, "desc": self.desc, "res_id": self.res_id, "cls": self.cls,
+                "bounds": list(self.bounds), "clickable": self.clickable, "editable": self.editable,
+                "scrollable": self.scrollable, "focused": self.focused, "password": self.password}
 
 
 def parse(xml: str) -> list[Element]:
@@ -67,6 +74,7 @@ def parse(xml: str) -> list[Element]:
             id=len(out), cls=cls, text=text, desc=desc, res_id=a.get("resource-id", ""),
             bounds=(x1, y1, x2, y2), clickable=clickable, editable=editable,
             scrollable=scrollable, checked=checked, focused=a.get("focused") == "true",
+            password=a.get("password") == "true",
         ))
     return out
 
