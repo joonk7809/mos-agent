@@ -1,6 +1,7 @@
 """Run the task suite in each perception mode and score with on-device checks.
 
-    python -m evals.run_evals --modes screenshot tree both som --repeats 3
+    python -m evals.run_evals --server http://localhost:8080 --token $MOS_TOKEN   # MAI-UI via the MOS server
+    python -m evals.run_evals --modes screenshot tree both som --repeats 3       # Claude baseline
 
 Each check is an `adb shell` command whose output is compared to the task's
 expectation, so success is judged by device state, not by the agent's own claim.
@@ -16,6 +17,7 @@ from pathlib import Path
 
 from mos.agent import Agent
 from mos.device import AdbDevice
+from mos.remote import RemoteRunner, http_post
 
 
 def check(dev: AdbDevice, t: dict) -> bool:
@@ -36,7 +38,11 @@ def main() -> None:
     p.add_argument("--repeats", type=int, default=1)
     p.add_argument("--snapshot", default="clean", help="emulator snapshot to load before each task ('' to skip)")
     p.add_argument("--serial")
+    p.add_argument("--server", help="MOS server URL: evaluate the server's model instead of the Claude agent")
+    p.add_argument("--token", default="")
     a = p.parse_args()
+    if a.server:
+        a.modes = ["server"]
 
     tasks = [json.loads(l) for l in open(a.tasks) if l.strip()]
     dev = AdbDevice(serial=a.serial)
@@ -46,11 +52,17 @@ def main() -> None:
             for rep in range(a.repeats):
                 if a.snapshot:
                     subprocess.run(["adb", "emu", "avd", "snapshot", "load", a.snapshot], check=False)
-                r = Agent(dev, mode=mode, run_root=Path("runs") / "evals" / mode / t["id"],
-                          confirm=lambda _m: True, ask=lambda _q: "Use your best judgment.").run(t["task"])
+                if a.server:
+                    runner = RemoteRunner(dev, http_post(a.server, a.token), confirm=lambda _r: True,
+                                          ask=lambda _q: "Use your best judgment.", log=lambda *_: None)
+                    status = runner.run(t["task"])
+                    extra = {"self_report": status == "success", "steps": 0}
+                else:
+                    r = Agent(dev, mode=mode, run_root=Path("runs") / "evals" / mode / t["id"],
+                              confirm=lambda _m: True, ask=lambda _q: "Use your best judgment.").run(t["task"])
+                    extra = {"self_report": r.success, "steps": r.steps, **r.usage}
                 ok = check(dev, t)
-                rows.append({"mode": mode, "task": t["id"], "rep": rep, "success": ok,
-                             "self_report": r.success, "steps": r.steps, **r.usage})
+                rows.append({"mode": mode, "task": t["id"], "rep": rep, "success": ok, **extra})
                 print(json.dumps(rows[-1]))
     Path("runs").mkdir(exist_ok=True)
     Path("runs/eval_results.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")

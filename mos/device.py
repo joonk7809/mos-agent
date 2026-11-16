@@ -14,6 +14,7 @@ KEYCODES = {
     "app_switch": "KEYCODE_APP_SWITCH",
     "delete": "KEYCODE_DEL",
     "tab": "KEYCODE_TAB",
+    "menu": "KEYCODE_MENU",
 }
 
 
