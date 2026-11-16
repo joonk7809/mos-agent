@@ -61,7 +61,7 @@ mos/observe.py   builds one observation; resizing, coordinate mapping, set-of-ma
 mos/agent.py     tools, system prompt, the loop, approval gate, logging
 mos/fake.py      fake device for offline tests
 evals/           task suite + runner
-tests/           offline tests (pytest -q), using a mocked API
+tests/           offline tests (run `pytest`), using a mocked API
 ```
 
 ## Known limits (good next things to work on)
