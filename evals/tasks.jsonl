@@ -1,0 +1,6 @@
+{"id": "settings-dark-mode", "task": "Turn on dark theme in Settings.", "check": "settings get secure ui_night_mode", "expect": "2"}
+{"id": "settings-wifi-off", "task": "Turn Wi-Fi off.", "check": "settings get global wifi_on", "expect": "0"}
+{"id": "clock-alarm", "task": "Set an alarm for 7:30 AM in the Clock app.", "check": "dumpsys alarm | grep -c com.google.android.deskclock", "expect_nonzero": true}
+{"id": "contacts-add", "task": "Add a contact named Ada Lovelace with phone number 555-0100.", "check": "content query --uri content://com.android.contacts/data --projection data1 --where \"data1='Ada Lovelace'\"", "expect_contains": "Ada Lovelace"}
+{"id": "calendar-event", "task": "Create a calendar event tomorrow at 3 PM titled Dentist.", "check": "content query --uri content://com.android.calendar/events --projection title", "expect_contains": "Dentist"}
+{"id": "chrome-search", "task": "Open Chrome and search for the weather in Seoul.", "check": "dumpsys window | grep mCurrentFocus", "expect_contains": "chrome"}
