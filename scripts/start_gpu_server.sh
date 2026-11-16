@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Start MOS on a rented GPU instance: vLLM (MAI-UI-8B) + the MOS server, reachable over Tailscale.
+#
+#   git clone https://github.com/joonk7809/mos-agent && cd mos-agent
+#   TS_AUTHKEY=tskey-auth-... MOS_DATA=/workspace/mos ./scripts/start_gpu_server.sh
+#
+# Needs: an NVIDIA GPU with >= 24 GB, Python 3.10+, and ideally a persistent volume
+# for MOS_DATA (model weights, run logs and the token survive restarts there).
+# Stop the instance when you're done testing: rented GPUs bill by the hour.
+set -euo pipefail
+
+MOS_DATA="${MOS_DATA:-$HOME/mos-data}"
+MODEL="${MOS_MODEL:-Tongyi-MAI/MAI-UI-8B}"
+mkdir -p "$MOS_DATA/hf" "$MOS_DATA/runs" "$MOS_DATA/logs"
+export HF_HOME="$MOS_DATA/hf"   # cache weights on the persistent volume (~17 GB)
+
+# 1. Python deps (skipped if already installed)
+python3 -c "import vllm" 2>/dev/null || pip install -q "vllm==0.11.0" "transformers>=4.57.0"
+python3 -c "import fastapi, uvicorn" 2>/dev/null || pip install -q -r requirements.txt
+
+# 2. Token phones use; created once and kept
+if [[ ! -f "$MOS_DATA/token" ]]; then openssl rand -hex 16 > "$MOS_DATA/token"; fi
+export MOS_TOKEN="$(cat "$MOS_DATA/token")"
+
+# 3. Tailscale, so phones reach this box without opening a public port.
+#    Userspace networking works inside containers that have no /dev/net/tun.
+if [[ -n "${TS_AUTHKEY:-}" ]]; then
+  command -v tailscale >/dev/null || curl -fsSL https://tailscale.com/install.sh | sh
+  pgrep tailscaled >/dev/null || (tailscaled --tun=userspace-networking --state="$MOS_DATA/tailscaled.state" \
+    > "$MOS_DATA/logs/tailscaled.log" 2>&1 &)
+  sleep 3
+  tailscale up --authkey="$TS_AUTHKEY" --hostname="${TS_HOSTNAME:-mos-gpu}"
+fi
+
+# 4. The model
+if ! curl -sf localhost:8000/v1/models >/dev/null; then
+  nohup python3 -m vllm.entrypoints.openai.api_server --model "$MODEL" \
+    --served-model-name MAI-UI-8B --host 127.0.0.1 --port 8000 \
+    --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code \
+    > "$MOS_DATA/logs/vllm.log" 2>&1 &
+  echo "Loading the model (first run downloads ~17 GB)..."
+  until curl -sf localhost:8000/v1/models >/dev/null; do sleep 5; done
+fi
+
+# 5. The MOS server
+echo
+echo "Phones: server http://$(tailscale ip -4 2>/dev/null | head -1 || echo '<this-host>'):8080"
+echo "        token  $MOS_TOKEN"
+echo
+MOS_LLM_URL=http://127.0.0.1:8000/v1 MOS_RUNS="$MOS_DATA/runs" \
+  exec python3 -m uvicorn mos.server:app --host 0.0.0.0 --port 8080

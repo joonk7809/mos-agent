@@ -1,13 +1,13 @@
 # MOS: a phone agent for you and your friends
 
-An open-weight model (MAI-UI-8B) on a home GPU drives Android phones. Each phone
+An open-weight model (MAI-UI-8B) on a rented GPU drives Android phones. Each phone
 runs the MOS app, which uses Android's accessibility APIs to send its screen to the
 server and carry out the actions the server sends back: taps, swipes, typing,
 opening apps. The agent asks before anything that looks like sending, paying or
 deleting, and the overlay has a Stop button.
 
 ```
- phone (MOS app)                         home server
+ phone (MOS app)                         GPU server (rented)
  ───────────────                         ───────────
  screenshot + UI tree  ── Tailscale ──▶  mos.server (FastAPI) ──▶ vLLM: MAI-UI-8B
  tap / swipe / type    ◀──────────────   next action + "ask first?" check
@@ -15,45 +15,55 @@ deleting, and the overlay has a Stop button.
 
 | Part | Where | What it does |
 |---|---|---|
-| `mos/server.py` | home server | Sessions, MAI-UI prompting, maps 0-999 coords to pixels, safety check, logs every run |
-| `mos/maiui.py` | home server | MAI-UI prompt and output format, matching the official agent |
-| `mos/safety.py` | home server | Flags taps on Send/Pay/Delete-like buttons, typing into password fields, card numbers |
+| `mos/server.py` | GPU server | Sessions, MAI-UI prompting, maps 0-999 coords to pixels, safety check, logs every run |
+| `mos/maiui.py` | GPU server | MAI-UI prompt and output format, matching the official agent |
+| `mos/safety.py` | GPU server | Flags taps on Send/Pay/Delete-like buttons, typing into password fields, card numbers |
 | `android/` | phones | The app: accessibility service (screen, UI tree, gestures, text, keys), overlay, settings |
 | `mos/remote.py` | your laptop | Same protocol as the app, but over ADB. Use it to test on the emulator |
-| `mos/export_sft.py` | home server | Turns successful runs into fine-tuning data (Tier 1) |
+| `mos/export_sft.py` | GPU server | Turns successful runs into fine-tuning data (Tier 1) |
 | `mos/agent.py` | anywhere | The original Claude-driven agent, kept as a baseline |
 
-## 1. Home server (GPU box)
+## 1. Model server (rented GPU)
 
-You need an NVIDIA GPU with 24 GB (e.g. a used RTX 3090). MAI-UI-8B in bf16 is about 17 GB.
+Run it on a rented cloud GPU and stop the instance when you're not testing. Owning
+hardware only pays off once usage is steady (see the plan doc). You need an NVIDIA
+GPU with 24 GB or more (L4, A10, RTX 4090, L40S, A100...). MAI-UI-8B in bf16 is about 17 GB.
+
+One command on the instance, ideally with a persistent volume at `MOS_DATA`:
 
 ```bash
-# the model, served with an OpenAI-compatible API (MAI-UI's instructions pin vLLM 0.11.0)
-pip install vllm==0.11.0 "transformers>=4.57.0"
+git clone https://github.com/joonk7809/mos-agent && cd mos-agent
+TS_AUTHKEY=tskey-auth-... MOS_DATA=/workspace/mos ./scripts/start_gpu_server.sh
+```
+
+[`scripts/start_gpu_server.sh`](scripts/start_gpu_server.sh) installs vLLM (pinned to
+0.11.0 per MAI-UI's instructions), joins your tailnet, starts MAI-UI-8B and then the
+MOS server, and prints the URL and token for phones. Model weights, run logs and the
+token live in `MOS_DATA`, so a restarted instance comes back without re-downloading.
+Get the auth key from the Tailscale admin console (Settings → Keys), and share the
+`mos-gpu` machine with friends there. Don't expose port 8080 publicly.
+
+The same thing by hand:
+
+```bash
+pip install vllm==0.11.0 "transformers>=4.57.0" && pip install -r requirements.txt
 python -m vllm.entrypoints.openai.api_server --model Tongyi-MAI/MAI-UI-8B \
   --served-model-name MAI-UI-8B --host 127.0.0.1 --port 8000 \
-  --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code
-
-# the MOS server, in this repo
-pip install -r requirements.txt
+  --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code &
 export MOS_TOKEN=$(openssl rand -hex 16)     # give this to each phone
 MOS_LLM_URL=http://127.0.0.1:8000/v1 uvicorn mos.server:app --host 0.0.0.0 --port 8080
 ```
-
-Install [Tailscale](https://tailscale.com) on the server and every phone, and share the
-server with friends from the Tailscale admin page. Phones then use
-`http://<server's 100.x tailscale IP>:8080`. Don't expose port 8080 to the internet.
 
 Settings (env vars): `MOS_TOKEN` (required), `MOS_LLM_URL`, `MOS_LLM_MODEL`,
 `MOS_RUNS` (log folder, default `runs/server`), `MOS_MAX_STEPS` (default 40).
 
 ## 2. Try it on the emulator first
 
-With the emulator running (`adb devices` shows it) and the server up:
+With the emulator running (`adb devices` shows it), the GPU server up, and your laptop on the same tailnet:
 
 ```bash
-python -m mos.remote "Turn on dark theme" --server http://localhost:8080 --token $MOS_TOKEN
-python -m evals.run_evals --server http://localhost:8080 --token $MOS_TOKEN   # scored by device state
+python -m mos.remote "Turn on dark theme" --server http://mos-gpu:8080 --token $MOS_TOKEN
+python -m evals.run_evals --server http://mos-gpu:8080 --token $MOS_TOKEN   # scored by device state
 ```
 
 `evals/run_evals.py` loads the emulator snapshot named `clean` before each task.
@@ -88,7 +98,7 @@ python -m mos.export_sft runs/server --out data/sft.jsonl
 ```
 
 That writes MAI-UI-format samples (`{"messages", "images"}`, the ms-swift /
-LLaMA-Factory multimodal layout) for a QLoRA fine-tune on the same 3090.
+LLaMA-Factory multimodal layout) for a QLoRA fine-tune on the same rented GPU (a few hours).
 
 ## Tests
 
