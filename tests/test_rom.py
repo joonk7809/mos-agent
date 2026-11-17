@@ -192,3 +192,14 @@ def test_app_never_enables_accessibility_on_its_own() -> None:
     fn = kt.rfind("private fun ", 0, calls[0])
     assert kt[fn:].startswith("private fun turnOnAgent()")
     assert "turnOnAgent() }" in kt  # only reached from the button's click listener
+
+
+def test_bridge_only_drives_labelled_targets_and_checks_version() -> None:
+    kt = (APP / "kotlin" / "dev" / "mos" / "agent" / "MosAccessibilityService.kt").read_text()
+    assert 'labelledTargetAt(x1, y1) && viaBridge("touch")' in kt
+    client = (APP / "kotlin" / "dev" / "mos" / "agent" / "BridgeClient.kt").read_text()
+    java = (BRIDGE / "src" / "dev" / "mos" / "bridge" / "BridgeService.java").read_text()
+    bridge_version = int(re.search(r"static final int VERSION = (\d+);", java).group(1))  # type: ignore[union-attr]
+    min_version = int(re.search(r"const val MIN_VERSION = (\d+)", client).group(1))  # type: ignore[union-attr]
+    assert bridge_version >= min_version >= 2
+    assert "if (version < MIN_VERSION)" in client

@@ -28,8 +28,23 @@ class BridgeClient(
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
-            bridge = IMosBridge.Stub.asInterface(service)
-            Log.i(TAG, "bridge connected")
+            val b = IMosBridge.Stub.asInterface(service)
+            val version = try {
+                b.version()
+            } catch (e: RemoteException) {
+                Log.w(TAG, "bridge version check failed", e)
+                0
+            } catch (e: SecurityException) {
+                Log.w(TAG, "bridge refused caller", e)
+                0
+            }
+            // v1 bridges returned booleans in the same slots; misreading them could repeat input.
+            if (version < MIN_VERSION) {
+                Log.w(TAG, "bridge version $version < $MIN_VERSION; using accessibility only")
+                return
+            }
+            bridge = b
+            Log.i(TAG, "bridge v$version connected")
             onConnected?.invoke(this@BridgeClient)
         }
 
@@ -92,5 +107,6 @@ class BridgeClient(
         private const val TAG = "MOS"
         const val PACKAGE = "dev.mos.bridge"
         const val ACTION = "dev.mos.bridge.BIND"
+        const val MIN_VERSION = 2
     }
 }

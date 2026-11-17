@@ -177,13 +177,48 @@ class MosAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** One touch stroke: through the bridge on MOS ROM phones, else an accessibility gesture. */
+    /**
+     * One touch stroke: through the bridge on MOS ROM phones, else an accessibility gesture.
+     *
+     * The bridge is used only when the stroke starts on a labelled element the safety gate
+     * could see. Android hides `accessibilityDataSensitive` views (consent and permission
+     * buttons) from us and ignores accessibility gestures on them, but not injected input.
+     * Sending unlabelled targets through accessibility keeps that protection: the gate
+     * can't judge what it can't see, so Android's own shield must stay in place.
+     */
     private fun move(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long) {
-        val done = viaBridge("touch") {
+        val done = labelledTargetAt(x1, y1) && viaBridge("touch") {
             if (x1 == x2 && y1 == y2) it.tap(x1, y1, ms) else it.swipe(x1, y1, x2, y2, ms)
         }
         if (!done) gesture(stroke(x1, y1, x2, y2, ms))
     }
+
+    /** Whether the smallest visible node under (x, y) carries a label itself or via its children. */
+    private fun labelledTargetAt(x: Int, y: Int): Boolean {
+        val root = rootInActiveWindow ?: return false
+        var best: AccessibilityNodeInfo? = null
+        var bestArea = Long.MAX_VALUE
+        val r = Rect()
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(root)
+        var seen = 0
+        while (stack.isNotEmpty() && seen++ < 2000) {
+            val n = stack.removeLast()
+            if (!n.isVisibleToUser) continue
+            n.getBoundsInScreen(r)
+            if (!r.contains(x, y)) continue
+            val area = r.width().toLong() * r.height()
+            if (area <= bestArea) { best = n; bestArea = area }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { stack.add(it) }
+        }
+        val target = best ?: return false
+        return hasLabel(target) || (target.isClickable && (0 until target.childCount).any { i ->
+            target.getChild(i)?.let { hasLabel(it) } == true
+        })
+    }
+
+    private fun hasLabel(n: AccessibilityNodeInfo) =
+        !n.text.isNullOrBlank() || !n.contentDescription.isNullOrBlank()
 
     /**
      * True if the bridge did it; false if there is no bridge or it refused before injecting

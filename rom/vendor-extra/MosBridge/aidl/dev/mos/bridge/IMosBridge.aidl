@@ -25,7 +25,7 @@ interface IMosBridge {
     /** Injection failed partway; part of the input may have landed. Do not retry. */
     const int FAILED = 4;
 
-    /** Interface version, bumped when methods are appended. */
+    /** Interface version: 2 = result codes. Clients must not use a bridge below 2. */
     int version();
 
     /** Press at (x, y) for durationMs (60 = tap, 800 = long press). */

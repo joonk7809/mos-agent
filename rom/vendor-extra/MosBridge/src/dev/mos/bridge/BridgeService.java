@@ -43,6 +43,8 @@ public final class BridgeService extends Service {
     static final String AGENT_PACKAGE = "dev.mos.agent";
     static final String AGENT_SERVICE = "dev.mos.agent.MosAccessibilityService";
 
+    /** 2: input methods return result codes (1 returned booleans). */
+    static final int VERSION = 2;
     static final long MAX_DURATION_MS = 5_000;
     static final int MAX_TEXT_CHARS = 2_000;
     private static final long MOVE_INTERVAL_MS = 16;
@@ -76,7 +78,7 @@ public final class BridgeService extends Service {
         @Override
         public int version() {
             enforceCaller();
-            return 1;
+            return VERSION;
         }
 
         @Override
@@ -165,18 +167,24 @@ public final class BridgeService extends Service {
     /** LOCKED / BLOCKED if input must not be injected now, else OK. */
     private int gate() {
         if (locked()) return IMosBridge.LOCKED;
-        if (BLOCKED_FOREGROUND.contains(foregroundPackage())) return IMosBridge.BLOCKED;
+        if (sensitiveScreenUp()) return IMosBridge.BLOCKED;
         return IMosBridge.OK;
     }
 
-    /** Package of the top activity, via REAL_GET_TASKS. Unknown counts as blocked. */
-    private String foregroundPackage() {
+    /**
+     * True if a permission or install screen tops any of the most recent tasks (via
+     * REAL_GET_TASKS). Checking a few tasks, not just the first, covers split screen;
+     * it may over-block when such a screen sits in a recent background task. Unknown
+     * counts as blocked.
+     */
+    private boolean sensitiveScreenUp() {
         ActivityManager am = getSystemService(ActivityManager.class);
-        List<ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(1);
-        if (tasks == null || tasks.isEmpty() || tasks.get(0).topActivity == null) {
-            return BLOCKED_FOREGROUND.get(0);
+        List<ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(3);
+        if (tasks == null || tasks.isEmpty()) return true;
+        for (ActivityManager.RunningTaskInfo t : tasks) {
+            if (t.topActivity == null || BLOCKED_FOREGROUND.contains(t.topActivity.getPackageName())) return true;
         }
-        return tasks.get(0).topActivity.getPackageName();
+        return false;
     }
 
     private Point screen() {
