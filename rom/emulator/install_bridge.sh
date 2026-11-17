@@ -98,8 +98,8 @@ adb_ root >/dev/null; adb_ wait-for-device
 if ! adb_ remount 2>&1 | tee "$WORK/remount.txt" | grep -qi "remount succeeded"; then
   if grep -qi "reboot" "$WORK/remount.txt"; then
     # First time on this AVD: verity was just disabled and needs a reboot.
-    adb_ reboot; wait_boot; adb_ root >/dev/null; adb_ wait-for-device
-    adb_ remount | grep -qi "remount succeeded" || { cat "$WORK/remount.txt" >&2; exit 1; }
+    adb_ reboot; adb_ wait-for-disconnect; wait_boot; adb_ root >/dev/null; adb_ wait-for-device
+    adb_ remount 2>&1 | tee "$WORK/remount.txt" | grep -qi "remount succeeded" || { cat "$WORK/remount.txt" >&2; exit 1; }
   else
     cat "$WORK/remount.txt" >&2
     echo "remount failed: start the emulator with -writable-system" >&2; exit 1
@@ -110,7 +110,7 @@ sh_ mkdir -p /system/priv-app/MosBridge
 adb_ push "$WORK/MosBridge.apk" /system/priv-app/MosBridge/MosBridge.apk >/dev/null
 adb_ push "$REPO_ROOT/rom/vendor-extra/MosBridge/privapp-permissions-mos.xml" \
   /system/etc/permissions/privapp-permissions-mos.xml >/dev/null
-adb_ reboot; wait_boot
+adb_ reboot; adb_ wait-for-disconnect; wait_boot
 log "installing the MOS app"
 adb_ install -r "$APP_APK" >/dev/null
 

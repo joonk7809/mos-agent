@@ -79,7 +79,7 @@ class AgentLoop(
         } finally {
             isRunning = false
             // Read by evals/run_evals.py --driver app. No task text or screen content here.
-            Log.i("MOS", "MOS_TASK_END status=$status steps=$steps eval=$eval")
+            Log.i("MOS", "MOS_TASK_END status=$status steps=$steps eval=$eval bridge=${service.bridgeConnected}")
         }
     }
 

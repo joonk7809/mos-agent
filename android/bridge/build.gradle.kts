@@ -43,14 +43,18 @@ android {
 
 // Pins the MOS app's signing certificate, like rom/tools/pin_cert.py does for the ROM:
 //   ./gradlew :bridge:assembleRelease -Pmos.appCertSha256=<sha256 of the app's signing cert>
+// Without the property (e.g. Android Studio's "Make Project") it pins the all-zero
+// placeholder, which no app matches: the bridge then refuses every caller.
 val generateKnownCerts = tasks.register("generateKnownCerts") {
     val digest = providers.gradleProperty("mos.appCertSha256")
     inputs.property("digest", digest.orElse(""))
     outputs.dir(certDir)
     doLast {
-        val d = digest.orNull?.lowercase()?.removePrefix("sha256:")?.replace(":", "")?.trim()
-            ?: error("pass -Pmos.appCertSha256=<SHA-256 of the MOS app's signing certificate>")
-        require(Regex("[0-9a-f]{64}").matches(d) && d != "0".repeat(64)) { "not a SHA-256 digest: $d" }
+        val given = digest.orNull?.lowercase()?.removePrefix("sha256:")?.replace(":", "")?.trim()
+        if (given == null) logger.warn("mos.appCertSha256 not set: this bridge build trusts no app")
+        val d = given ?: "0".repeat(64)
+        require(Regex("[0-9a-f]{64}").matches(d)) { "not a SHA-256 digest: $d" }
+        require(given == null || d != "0".repeat(64)) { "the all-zero digest is the refuse-everyone placeholder" }
         val values = File(certDir, "values").apply { mkdirs() }
         File(values, "known_certs.xml").writeText(
             """

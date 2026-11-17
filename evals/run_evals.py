@@ -96,7 +96,9 @@ def load_tasks(path: str, only: list[str] | None = None) -> list[dict]:
 
 APP_RECEIVER = "dev.mos.agent/.EvalReceiver"
 BRIDGE_PACKAGE = "dev.mos.bridge"
-TASK_END = re.compile(r"MOS_TASK_END status=(\w+) steps=(\d+)")
+TASK_END = re.compile(r"MOS_TASK_END status=(\w+) steps=(\d+)(?: eval=\w+)?(?: bridge=(true|false))?")
+# The app couldn't start the task at all: a broken setup, not a task failure.
+SETUP_FAILURES = {"no_service", "no_server_settings", "busy", "bad_request"}
 
 
 def is_emulator(shell: Shell) -> bool:
@@ -104,14 +106,35 @@ def is_emulator(shell: Shell) -> bool:
     return "1" in (shell("getprop ro.kernel.qemu").strip(), shell("getprop ro.boot.qemu").strip())
 
 
-def set_bridge(shell: Shell, state: str) -> None:
-    """Enable or disable the MOS bridge for the next run ('keep' leaves it as the snapshot has it)."""
-    if state == "on":
-        shell(f"pm enable {BRIDGE_PACKAGE}")
-    elif state == "off":
-        shell(f"pm disable-user --user 0 {BRIDGE_PACKAGE}")
-    elif state != "keep":
+def bridge_state(shell: Shell) -> str:
+    """'missing', 'disabled' or 'enabled' (the shell wrapper hides exit codes, so read pm's output)."""
+    if f"package:{BRIDGE_PACKAGE}" not in shell(f"pm list packages {BRIDGE_PACKAGE}"):
+        return "missing"
+    if f"package:{BRIDGE_PACKAGE}" in shell(f"pm list packages -d {BRIDGE_PACKAGE}"):
+        return "disabled"
+    return "enabled"
+
+
+def set_bridge(shell: Shell, state: str, sleep: Callable[[float], None] = time.sleep) -> None:
+    """Enable or disable the MOS bridge for the next run ('keep' leaves it as the snapshot has it).
+
+    Changes the package state only when needed: enabling an already-enabled package would
+    restart the bridge mid-connection. Raises if the bridge isn't installed or won't change.
+    """
+    if state not in ("on", "off", "keep"):
         raise ValueError(f"bridge state must be on, off or keep, not {state!r}")
+    if state == "keep":
+        return
+    want = "enabled" if state == "on" else "disabled"
+    have = bridge_state(shell)
+    if have == "missing":
+        raise RuntimeError("the MOS bridge isn't installed (was the emulator started with -writable-system?)")
+    if have == want:
+        return
+    shell(f"pm enable {BRIDGE_PACKAGE}" if state == "on" else f"pm disable-user --user 0 {BRIDGE_PACKAGE}")
+    if bridge_state(shell) != want:
+        raise RuntimeError(f"couldn't switch the MOS bridge {state}")
+    sleep(3)  # let the app notice (re)binding before the task starts
 
 
 def run_app(shell: Shell, task: str, timeout_s: float = 600, poll_s: float = 2.0,
@@ -124,10 +147,22 @@ def run_app(shell: Shell, task: str, timeout_s: float = 600, poll_s: float = 2.0
         m = TASK_END.search(shell("logcat -d -s MOS:I"))
         if m:
             status = m.group(1)
-            return {"status": status, "self_report": status == "success", "steps": int(m.group(2))}
+            r = {"status": status, "self_report": status == "success", "steps": int(m.group(2))}
+            if m.group(3):
+                r["bridge_connected"] = m.group(3) == "true"
+            return r
         sleep(poll_s)
     shell(f"am broadcast -n {APP_RECEIVER} -a dev.mos.agent.EVAL_STOP")
     return {"status": "timeout", "self_report": False, "steps": None}
+
+
+def run_invalid_reason(row: dict, bridge: str) -> str | None:
+    """Why an app-driven run doesn't measure the task (or None if it does)."""
+    if row.get("status") in SETUP_FAILURES:
+        return f"app couldn't start the task: {row['status']}"
+    if bridge in ("on", "off") and "bridge_connected" in row and row["bridge_connected"] != (bridge == "on"):
+        return f"bridge was {'connected' if row['bridge_connected'] else 'not connected'} in a bridge-{bridge} run"
+    return None
 
 
 def git_sha() -> str:
@@ -195,8 +230,12 @@ def main() -> None:
                     row = {"mode": mode, "task": t["id"], "rep": rep}
                     try:
                         set_bridge(shell, a.bridge)
-                    except Exception as e:  # noqa: BLE001 - recorded on the row
-                        row["note"] = f"bridge toggle failed: {e}"
+                    except Exception as e:  # noqa: BLE001 - an arm we can't set up doesn't count
+                        row.update(invalid=True, success=False, note=f"bridge toggle failed: {e}")
+                        rows.append(row)
+                        f.write(json.dumps(row) + "\n")
+                        print(json.dumps(row))
+                        continue
                     try:
                         before = snapshot_outputs(shell, t)
                     except Exception as e:  # noqa: BLE001 - device trouble shouldn't end the whole eval
@@ -211,6 +250,9 @@ def main() -> None:
                         except Exception as e:  # noqa: BLE001 - counted as a failed run, and we move on
                             row.update(status="error", self_report=False, note=f"run crashed: {e}")
                         row["seconds"] = round(time.time() - t0, 1)
+                        bad = run_invalid_reason(row, a.bridge)
+                        if bad:
+                            row.update(invalid=True, note=bad)
                         try:
                             row["success"] = task_passes(shell, t, before)
                         except Exception as e:  # noqa: BLE001

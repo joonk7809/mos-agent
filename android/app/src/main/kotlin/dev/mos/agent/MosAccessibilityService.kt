@@ -46,6 +46,9 @@ class MosAccessibilityService : AccessibilityService() {
         private set
     private val executor = Executors.newSingleThreadExecutor()
     private val bridge = BridgeClient(this)
+
+    /** Whether taps/keys can go through the MOS system bridge right now (logged for evals). */
+    val bridgeConnected: Boolean get() = bridge.available
     private var loop: AgentLoop? = null
 
     override fun onServiceConnected() {

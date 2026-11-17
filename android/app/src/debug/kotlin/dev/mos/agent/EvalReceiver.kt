@@ -42,7 +42,7 @@ class EvalReceiver : BroadcastReceiver() {
     }
 
     private fun end(status: String) {
-        Log.i(TAG, "MOS_TASK_END status=$status steps=0 eval=true")
+        Log.i(TAG, "MOS_TASK_END status=$status steps=0 eval=true bridge=false")
     }
 
     companion object {
