@@ -12,7 +12,9 @@ import sys
 data = json.load(sys.stdin)
 path = (data.get("tool_input") or {}).get("file_path") or ""
 root = os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd())
-if not path.endswith(".py") or not os.path.abspath(path).startswith(os.path.abspath(root)):
+if not path.endswith(".py") or not os.path.isfile(path):
+    sys.exit(0)
+if os.path.commonpath([os.path.realpath(path), os.path.realpath(root)]) != os.path.realpath(root):
     sys.exit(0)
 r = subprocess.run([sys.executable, "-m", "ruff", "check", "--fix", path], capture_output=True, text=True, cwd=root)
 if r.returncode == 1:  # 1 = lint findings remain; other codes mean ruff itself is missing/broken: don't block

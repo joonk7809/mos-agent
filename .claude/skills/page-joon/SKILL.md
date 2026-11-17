@@ -17,7 +17,7 @@ Don't page for: setup and tooling, library choices, refactors, test strategy, na
 Do page (examples): switching away from MAI-UI-8B; building a custom ROM vs staying accessibility-only; collecting friends' data for fine-tuning; anything that would send/pay/delete on a real phone during tests; monthly spend above what's agreed; a reviewer verdict of RETHINK you can't resolve.
 
 ## How
-Interface owned by the pager project (`pager/README.md` in this repo once merged is the spec). A page **is** a GitHub issue in `joonk7809/mos-agent` with the label `needs-joon`:
+Interface owned by the pager project (`pager/README.md` becomes the spec once the pager PR merges; until then this section is). A page **is** a GitHub issue in `joonk7809/mos-agent` with the label `needs-joon`:
 
 - Title: the question, short.
 - Body starts with this header (an HTML comment, invisible on GitHub), then markdown context whose first ~300 characters make sense alone, because that's what the widget shows:
@@ -35,7 +35,7 @@ recommended: 1            (1-based)
 **Tradeoffs:** one line per option.
 ```
 
-- Create it with the GitHub MCP tool (`issue_write`, method `create`, labels `["needs-joon"]`), or from a shell with `pager/bin/mos-page` (uses `GH_TOKEN` or `gh`).
+- Create it with the GitHub MCP tool (`issue_write`, method `create`, labels `["needs-joon"]`). Once the pager PR has merged, a shell can also use `pager/bin/mos-page` (uses `GH_TOKEN` or `gh`); check it exists first.
 - Also write a `Proposed` ADR linking the issue.
 
 ## After paging

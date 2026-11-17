@@ -108,3 +108,17 @@ def test_regression_null_coordinate_is_parse_error():
         maiui.parse_response('<tool_call>{"name":"mobile_use","arguments":{"action":"click","coordinate":[null,null]}}</tool_call>')
     with pytest.raises(maiui.ParseError):
         maiui.parse_response('<tool_call>{"name":"mobile_use","arguments":{"action":"click","coordinate":[NaN,5]}}</tool_call>')
+
+
+def test_regression_huge_box_center_stays_finite():
+    assert maiui._point([1e308, 0.0, 1e308, 0.0]) == [1e308, 0.0]
+
+
+def test_card_check_flags_cards_but_not_dates_or_phones():
+    flagged = ["4111-1111-1111-1111", "4111 1111 1111 1111 123 12/28", "card4111-1111-1111-1111",
+               "4111.1111.1111.1111", "3782 822463 10005", "4111111111111111"]
+    plain = ["+82 10-1234-5678", "2026-11-17 2026-11-20", "+1 415-555-1234", "010-1234-5678", "Meet at 7:30"]
+    for t in flagged:
+        assert safety.needs_confirmation({"type": "type", "text": t}, []) is not None, t
+    for t in plain:
+        assert safety.needs_confirmation({"type": "type", "text": t}, []) is None, t

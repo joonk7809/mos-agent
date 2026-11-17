@@ -6,3 +6,4 @@ Newest first. One entry per working session: what changed, what's verified, what
 - Added `CLAUDE.md`, `.claude/` (hooks, 4 subagents, 6 skills), `scripts/check.sh`, CI lint/type gates, Hypothesis property tests, ADR log, PR template.
 - Property tests found and fixed: dash-separated card numbers skipped confirmation (`mos/safety.py`); non-numeric/NaN model coordinates raised TypeError (`mos/maiui.py`).
 - Next: device-level eval baseline for MAI-UI-8B (needs emulator + GPU, see `run-evals`); stateful test of the session lifecycle.
+- Adversarial review (fresh subagent): FIX FIRST -> fixed. Bash guard now parses refspecs (blocks `+main`, `x:main`; allows `fix-main-bug`), card check uses digit groups (no longer flags dates/phones), hook tests in `tests/test_claude_hooks.py`.

@@ -93,9 +93,10 @@ def _point(c) -> list[float]:
         raise ParseError(f"bad coordinate {c!r}")
     if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in c):
         raise ParseError(f"non-numeric coordinate {c!r}")
-    if len(c) == 4:  # a box: use its center
-        return [(c[0] + c[2]) / 2, (c[1] + c[3]) / 2]
-    return [float(c[0]), float(c[1])]
+    p = [c[0] / 2 + c[2] / 2, c[1] / 2 + c[3] / 2] if len(c) == 4 else [float(c[0]), float(c[1])]  # box -> center
+    if not all(math.isfinite(v) for v in p):
+        raise ParseError(f"coordinate out of range {c!r}")
+    return [float(v) for v in p]
 
 
 def to_pixels(point: list[float], width: int, height: int) -> tuple[int, int]:
