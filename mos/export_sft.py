@@ -31,18 +31,26 @@ def load_session(d: Path) -> tuple[dict, list[dict]] | None:
     for s in steps:
         if s.get("event") == "user_text":
             texts[s["step"]] = s["text"]
+    final_info = json.loads(final.read_text())
+    # Replies typed by a person can hold private details (codes, addresses).
+    final_info["has_user_replies"] = any(
+        s.get("event") == "user_text" and s.get("source", "user") == "user" for s in steps)
     actions = [s for s in steps if "args" in s]
     for s in actions:
         if s["step"] in texts:
             s["user_text"] = texts[s["step"]]
-    return json.loads(final.read_text()), actions
+    return final_info, actions
 
 
-def session_samples(d: Path, history_n: int | None = None) -> list[dict]:
+def session_samples(d: Path, history_n: int | None = None, include_replies: bool = False) -> list[dict]:
+    """Samples for one session. Sessions where a person answered the agent are skipped unless
+    include_replies is set (only with that person's OK: the replies go into the training data)."""
     loaded = load_session(d)
     if not loaded:
         return []
     final, steps = loaded
+    if final["has_user_replies"] and not include_replies:
+        return []
     pol = policies.get(final.get("policy"))  # sessions logged before policies existed are MAI-UI
     system = pol.system_prompt(final.get("apps", []))
     task = (d / "task.txt").read_text()
@@ -85,6 +93,9 @@ def main() -> None:
     p.add_argument("--include-failed", action="store_true")
     p.add_argument("--policy", default=os.environ.get("MOS_POLICY", "maiui"),
                    help="only export sessions run with this policy (each model needs its own format)")
+    p.add_argument("--include-replies", action="store_true",
+                   help="also export sessions where someone answered the agent; their replies go into "
+                        "the data, so only with that person's OK")
     a = p.parse_args()
     want = policies.get(a.policy).NAME
     a.out.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +107,7 @@ def main() -> None:
                 continue
             if want != policies.get(loaded[0].get("policy")).NAME:
                 continue
-            for sample in session_samples(d):
+            for sample in session_samples(d, include_replies=a.include_replies):
                 f.write(json.dumps(sample, ensure_ascii=False) + "\n")
                 n_samples += 1
             n_sessions += 1

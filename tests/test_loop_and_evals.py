@@ -142,7 +142,8 @@ def test_sft_export_keeps_ask_user_replies(tmp_path):
     sid = start(c)
     c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG})
     c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG, "reply": "7:30"})
-    sample = session_samples(tmp_path / sid)[1]  # trained on the same context the model saw
+    assert session_samples(tmp_path / sid) == []  # replies are private: skipped unless opted in
+    sample = session_samples(tmp_path / sid, include_replies=True)[1]  # same context the model saw
     assert any(m["role"] == "user" and m["content"] == "7:30" for m in sample["messages"])
 
 
@@ -163,11 +164,44 @@ def test_terminate_without_status_is_accepted():
 
 
 def test_retries_sample_at_higher_temperature():
-    llm = ScriptedLLM(["garbage", resp({"action": "fly"}), resp(CLICK)])
+    llm = ScriptedLLM(["garbage", resp(CLICK)])
     raw, _, args = maiui.predict(llm, "SYS", "task", [], A)
     assert args["action"] == "click"
-    assert llm.overrides == [None, {"temperature": maiui.RETRY_TEMPERATURE}, {"temperature": maiui.RETRY_TEMPERATURE}]
+    assert llm.overrides == [None, {"temperature": maiui.RETRY_TEMPERATURE}]
     assert llm.calls[0] is llm.calls[1]  # same prompt, only decoding changes
+
+
+def test_two_malformed_answers_stop_rather_than_keep_guessing():
+    llm = ScriptedLLM(["garbage", resp({"action": "fly"}), resp(CLICK)])
+    with pytest.raises(maiui.ParseError):
+        maiui.predict(llm, "SYS", "task", [], A)
+    assert len(llm.calls) == 2
+
+
+# --- safety gate for drags and Enter -----------------------------------------------------
+
+SEND = {"text": "Send", "bounds": [900, 2100, 1060, 2260], "clickable": True}
+CHAT = {"text": "", "desc": "Message", "bounds": [0, 2100, 880, 2260], "editable": True, "focused": True}
+SEARCH = {"text": "", "desc": "Search settings", "bounds": [0, 100, 1080, 200], "editable": True, "focused": True}
+
+
+def test_drag_starting_on_a_risky_button_asks():
+    from mos import safety
+    tap_like = {"type": "drag", "x1": 950, "y1": 2150, "x2": 955, "y2": 2152}
+    assert safety.needs_confirmation(tap_like, [SEND]) == 'Tap "Send"'
+    slide = {"type": "drag", "x1": 950, "y1": 2150, "x2": 400, "y2": 2150}
+    assert safety.needs_confirmation(slide, [SEND]) == 'Drag from "Send"'
+    scroll = {"type": "drag", "x1": 540, "y1": 1800, "x2": 540, "y2": 600}
+    assert safety.needs_confirmation(scroll, [SEND]) is None
+
+
+def test_enter_in_a_chat_box_asks_but_not_in_search():
+    from mos import safety
+    enter = {"type": "key", "name": "enter"}
+    assert safety.needs_confirmation(enter, [CHAT, SEND]) is not None
+    assert safety.needs_confirmation(enter, [SEARCH]) is None
+    assert safety.needs_confirmation(enter, [SEND]) is None  # nothing focused
+    assert safety.needs_confirmation({"type": "key", "name": "back"}, [CHAT]) is None
 
 
 def test_remote_runner_reports_steps_and_session(tmp_path):

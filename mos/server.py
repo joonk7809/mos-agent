@@ -182,7 +182,7 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
             return StepResponse(done=True, status="stopped", step=len(s.steps))
         if req.reply is not None and s.steps:
             s.steps[-1].user_text = req.reply
-            log(s, {"step": len(s.steps) - 1, "event": "user_text", "text": req.reply})
+            log(s, {"step": len(s.steps) - 1, "event": "user_text", "source": "user", "text": req.reply})
         if len(s.steps) >= MAX_STEPS:
             finish(s, "max_steps")
             return StepResponse(done=True, status="max_steps", step=len(s.steps))
@@ -200,7 +200,7 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
             return StepResponse(done=True, status="stuck", thinking=seen["stuck"], step=n)
         if seen["no_effect"] and NO_EFFECT_HINT and s.steps and not s.steps[-1].user_text:
             s.steps[-1].user_text = NO_EFFECT_TEXT
-            log(s, {"step": n - 1, "event": "user_text", "text": NO_EFFECT_TEXT})
+            log(s, {"step": n - 1, "event": "user_text", "source": "hint", "text": NO_EFFECT_TEXT})
         (s.dir / f"step_{n:02d}.png").write_bytes(png)
         labels = [a.label for a in s.apps]
         t0 = time.time()

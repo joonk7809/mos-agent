@@ -181,7 +181,7 @@ class ChatClient:
 
 
 def predict(client, system: str, task: str, steps: list[Step], png: bytes,
-            history_n: int | None = None, retries: int = 3, policy=None) -> tuple[str, str, dict]:
+            history_n: int | None = None, retries: int = 2, policy=None) -> tuple[str, str, dict]:
     """Ask the model for the next action. Returns (raw_text, thinking, args).
 
     `policy` is the module that knows the model's prompt and action format

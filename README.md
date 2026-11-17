@@ -123,6 +123,7 @@ session successful in `final.json`, then:
 
 ```bash
 python -m mos.export_sft runs/server --out data/sft.jsonl --policy maiui   # one model format per file
+# Sessions where someone answered the agent are skipped; add --include-replies only with their OK.
 ```
 
 That writes MAI-UI-format samples (`{"messages", "images"}`, the ms-swift /
