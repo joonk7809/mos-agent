@@ -81,6 +81,7 @@ To compare models, start the GPU server once with each policy and run the same e
 ./scripts/start_gpu_server.sh                       # MAI-UI-8B
 MOS_POLICY=guiowl ./scripts/start_gpu_server.sh     # GUI-Owl-1.5-8B-Instruct (MIT)
 python -m evals.run_evals --server http://mos-gpu:8080 --token $MOS_TOKEN --repeats 3 --label maiui
+python -m evals.compare runs/evals/<maiui-run> runs/evals/<guiowl-run>   # winner, or "too close to call"
 ```
 
 The emulator client sends screenshots shrunk and JPEG-encoded exactly like the phone app,

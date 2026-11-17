@@ -245,3 +245,27 @@ def test_malformed_checks_are_rejected():
                 {"id": "x", "check": "ls", "expect": "1", "expect_nonzero": True}):
         with pytest.raises(ValueError):
             run_evals.checks_of(bad)
+
+
+def test_compare_calls_only_clear_gaps():
+    from evals.compare import paired_bootstrap
+    a = {f"t{i}": 0.0 for i in range(10)}
+    clear = paired_bootstrap(a, {f"t{i}": 1.0 for i in range(10)})
+    assert clear["verdict"] == "B is better" and clear["diff"] == 1.0
+    noisy = paired_bootstrap({f"t{i}": (i % 2) * 1.0 for i in range(10)}, {f"t{i}": ((i + 1) % 2) * 1.0 for i in range(10)})
+    assert noisy["verdict"] == "too close to call"
+    assert paired_bootstrap(a, {"other": 1.0})["tasks"] == 0
+
+
+def test_compare_cli_end_to_end(tmp_path, capsys, monkeypatch):
+    import sys
+    from evals import compare
+    for name, wins in (("a", 0), ("b", 1)):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "meta.json").write_text(json.dumps({"label": name, "screenshots": "jpeg"}))
+        (d / "results.jsonl").write_text("\n".join(json.dumps({"task": f"t{i}", "success": bool(wins)}) for i in range(8)))
+    monkeypatch.setattr(sys, "argv", ["x", str(tmp_path / "a"), str(tmp_path / "b")])
+    compare.main()
+    out = capsys.readouterr().out
+    assert "b - a: +100%" in out and "B is better" in out
