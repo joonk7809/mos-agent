@@ -22,9 +22,11 @@ class ScriptedLLM:
     def __init__(self, replies):
         self.replies = list(replies)
         self.calls = []
+        self.overrides = []
 
-    def complete(self, messages):
+    def complete(self, messages, overrides=None):
         self.calls.append(messages)
+        self.overrides.append(overrides)
         return self.replies.pop(0)
 
 

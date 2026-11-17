@@ -17,7 +17,9 @@ deleting, and the overlay has a Stop button.
 |---|---|---|
 | `mos/server.py` | GPU server | Sessions, MAI-UI prompting, maps 0-999 coords to pixels, safety check, logs every run |
 | `mos/maiui.py` | GPU server | MAI-UI prompt and output format, matching the official agent |
+| `mos/guiowl.py` | GPU server | GUI-Owl-1.5 prompt and output format (the A/B alternative), matching its official agent |
 | `mos/safety.py` | GPU server | Flags taps on Send/Pay/Delete-like buttons, typing into password fields, card numbers |
+| `mos/loopguard.py` | GPU server | Notices actions that didn't change the screen and ends runs that are stuck repeating them |
 | `android/` | phones | The app: accessibility service (screen, UI tree, gestures, text, keys), overlay, settings |
 | `mos/remote.py` | your laptop | Same protocol as the app, but over ADB. Use it to test on the emulator |
 | `mos/export_sft.py` | GPU server | Turns successful runs into fine-tuning data (Tier 1) |
@@ -54,8 +56,15 @@ export MOS_TOKEN=$(openssl rand -hex 16)     # give this to each phone
 MOS_LLM_URL=http://127.0.0.1:8000/v1 uvicorn mos.server:app --host 0.0.0.0 --port 8080
 ```
 
-Settings (env vars): `MOS_TOKEN` (required), `MOS_LLM_URL`, `MOS_LLM_MODEL`,
-`MOS_RUNS` (log folder, default `runs/server`), `MOS_MAX_STEPS` (default 40).
+Settings (env vars): `MOS_TOKEN` (required), `MOS_POLICY` (`maiui` default, or `guiowl`),
+`MOS_LLM_URL`, `MOS_LLM_MODEL`,
+`MOS_RUNS` (log folder, default `runs/server`), `MOS_MAX_STEPS` (default 40),
+`MOS_NO_EFFECT_HINT` (`1` tells the model when its last action changed nothing; off
+until the evals show it helps).
+
+A run ends with `success` or `fail` (the model's own verdict), `stopped` (you said no),
+`stuck` (the same action did nothing three times in a row, or it kept waiting on a
+frozen screen), `max_steps`, or `error`.
 
 ## 2. Try it on the emulator first
 
@@ -66,7 +75,26 @@ python -m mos.remote "Turn on dark theme" --server http://mos-gpu:8080 --token $
 python -m evals.run_evals --server http://mos-gpu:8080 --token $MOS_TOKEN   # scored by device state
 ```
 
-`evals/run_evals.py` loads the emulator snapshot named `clean` before each task.
+To compare models, start the GPU server once with each policy and run the same evals:
+
+```bash
+./scripts/start_gpu_server.sh                       # MAI-UI-8B
+MOS_POLICY=guiowl ./scripts/start_gpu_server.sh     # GUI-Owl-1.5-8B-Instruct (MIT)
+python -m evals.run_evals --server http://mos-gpu:8080 --token $MOS_TOKEN --repeats 3 --label maiui
+python -m evals.compare runs/evals/<maiui-run> runs/evals/<guiowl-run>   # winner, or "too close to call"
+```
+
+The emulator client sends screenshots shrunk and JPEG-encoded exactly like the phone app,
+so eval numbers reflect what phones will see.
+
+`evals/run_evals.py` loads the emulator snapshot named `clean` before each task and
+judges each run by device state (`adb shell` checks in `evals/tasks.jsonl`). If a task
+already looks done on the fresh snapshot, the run is marked invalid instead of counted.
+Results land in `runs/evals/<time>/` with a summary: success rate with a 95% interval,
+pass^k (every repeat of a task succeeded), and the false-success rate (the agent said
+done but the device disagrees). With ~10 tasks, use `--repeats 3` and only trust
+differences between configs whose intervals don't overlap much. `--only <ids>` runs a
+subset, `--label` notes what you changed.
 
 ## 3. The phone app
 
@@ -94,7 +122,8 @@ step's `args` in `steps.jsonl` (or redo the task and keep the good run), mark th
 session successful in `final.json`, then:
 
 ```bash
-python -m mos.export_sft runs/server --out data/sft.jsonl
+python -m mos.export_sft runs/server --out data/sft.jsonl --policy maiui   # one model format per file
+# Sessions where someone answered the agent are skipped; add --include-replies only with their OK.
 ```
 
 That writes MAI-UI-format samples (`{"messages", "images"}`, the ms-swift /

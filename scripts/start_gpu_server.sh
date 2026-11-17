@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Start MOS on a rented GPU instance: vLLM (MAI-UI-8B) + the MOS server, reachable over Tailscale.
+# Start MOS on a rented GPU instance: vLLM + the MOS server, reachable over Tailscale.
 #
 #   git clone https://github.com/joonk7809/mos-agent && cd mos-agent
 #   TS_AUTHKEY=tskey-auth-... MOS_DATA=/workspace/mos ./scripts/start_gpu_server.sh
+#   MOS_POLICY=guiowl TS_AUTHKEY=... ./scripts/start_gpu_server.sh     # GUI-Owl-1.5-8B instead of MAI-UI-8B
 #
 # Needs: an NVIDIA GPU with >= 24 GB, Python 3.10+, and ideally a persistent volume
 # for MOS_DATA (model weights, run logs and the token survive restarts there).
@@ -10,7 +11,16 @@
 set -euo pipefail
 
 MOS_DATA="${MOS_DATA:-$HOME/mos-data}"
-MODEL="${MOS_MODEL:-Tongyi-MAI/MAI-UI-8B}"
+export MOS_POLICY="${MOS_POLICY:-maiui}"
+if [[ "$MOS_POLICY" == "guiowl" ]]; then
+  MODEL="${MOS_MODEL:-mPLUG/GUI-Owl-1.5-8B-Instruct}"; SERVED=GUI-Owl-1.5-8B-Instruct
+  MAX_LEN="${MOS_MAX_LEN:-24576}"; IMAGES=5   # GUI-Owl keeps the last 5 screenshots
+  # Phones and mos.remote send 720x1600 screenshots, ~1.1k tokens each, so 5 fit easily.
+  # Unverified on a 24 GB card: if vLLM says the KV cache doesn't fit, lower MOS_MAX_LEN.
+else
+  MODEL="${MOS_MODEL:-Tongyi-MAI/MAI-UI-8B}"; SERVED=MAI-UI-8B
+  MAX_LEN="${MOS_MAX_LEN:-16384}"; IMAGES=3
+fi
 mkdir -p "$MOS_DATA/hf" "$MOS_DATA/runs" "$MOS_DATA/logs"
 export HF_HOME="$MOS_DATA/hf"   # cache weights on the persistent volume (~17 GB)
 
@@ -35,8 +45,10 @@ fi
 # 4. The model
 if ! curl -sf localhost:8000/v1/models >/dev/null; then
   nohup python3 -m vllm.entrypoints.openai.api_server --model "$MODEL" \
-    --served-model-name MAI-UI-8B --host 127.0.0.1 --port 8000 \
-    --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code \
+    --served-model-name "$SERVED" --host 127.0.0.1 --port 8000 \
+    --max-model-len "$MAX_LEN" --limit-mm-per-prompt "{\"image\": $IMAGES}" \
+    --max-num-seqs 4 \
+    --gpu-memory-utilization 0.90 --trust-remote-code \
     > "$MOS_DATA/logs/vllm.log" 2>&1 &
   echo "Loading the model (first run downloads ~17 GB)..."
   until curl -sf localhost:8000/v1/models >/dev/null; do sleep 5; done
@@ -47,5 +59,5 @@ echo
 echo "Phones: server http://$(tailscale ip -4 2>/dev/null | head -1 || echo '<this-host>'):8080"
 echo "        token  $MOS_TOKEN"
 echo
-MOS_LLM_URL=http://127.0.0.1:8000/v1 MOS_RUNS="$MOS_DATA/runs" \
+MOS_LLM_URL=http://127.0.0.1:8000/v1 MOS_LLM_MODEL="$SERVED" MOS_RUNS="$MOS_DATA/runs" \
   exec python3 -m uvicorn mos.server:app --host 0.0.0.0 --port 8080

@@ -31,9 +31,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from . import maiui, safety
+from . import loopguard, maiui, policies, safety
 
 MAX_STEPS = int(os.environ.get("MOS_MAX_STEPS", "40"))
+# Tell the model when its last action didn't change the screen. Off by default until the
+# evals show it helps MAI-UI (it is a message the model never saw in training).
+NO_EFFECT_HINT = os.environ.get("MOS_NO_EFFECT_HINT", "0") == "1"
+NO_EFFECT_TEXT = "(Your previous action did not change the screen. Try something different.)"
 
 
 class App(BaseModel):
@@ -64,7 +68,7 @@ class StepResponse(BaseModel):
     thinking: str = ""
     confirm: str | None = None    # if set, ask the user before executing `action`
     done: bool = False
-    status: str = "running"       # running | success | fail | stopped | max_steps | error
+    status: str = "running"       # running | success | fail | stopped | max_steps | stuck | error
     step: int = 0
 
 
@@ -77,7 +81,7 @@ class Session:
     dir: Path
     steps: list[maiui.Step] = field(default_factory=list)
     status: str = "running"
-    pending_reply_for: int | None = None  # index of the step that asked the user
+    guard: loopguard.LoopGuard = field(default_factory=loopguard.LoopGuard)
 
 
 def _resolve_app(name: str, apps: list[App]) -> App | None:
@@ -123,11 +127,13 @@ def to_device_action(args: dict, s: Session) -> dict:
     raise ValueError(f"unsupported action {kind!r}")
 
 
-def create_app(llm=None, run_root: Path | None = None, token: str | None = None) -> FastAPI:
+def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
+               policy: str | None = None) -> FastAPI:
+    pol = policies.get(policy or os.environ.get("MOS_POLICY"))
     llm = llm or maiui.ChatClient(
         base_url=os.environ.get("MOS_LLM_URL", "http://localhost:8000/v1"),
-        model=os.environ.get("MOS_LLM_MODEL", "MAI-UI-8B"),
-        api_key=os.environ.get("MOS_LLM_KEY", "EMPTY"))
+        model=os.environ.get("MOS_LLM_MODEL", "MAI-UI-8B" if pol is maiui else "GUI-Owl-1.5-8B-Instruct"),
+        api_key=os.environ.get("MOS_LLM_KEY", "EMPTY"), params=dict(pol.SAMPLING))
     run_root = run_root or Path(os.environ.get("MOS_RUNS", "runs/server"))
     token = token if token is not None else os.environ.get("MOS_TOKEN", "")
     if not token:
@@ -147,11 +153,12 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None)
         s.status = status
         (s.dir / "final.json").write_text(json.dumps({
             "task": s.task, "status": status, "steps": len(s.steps),
+            "no_effect_actions": s.guard.no_effect_total, "policy": pol.NAME,
             "screen": s.screen.model_dump(), "apps": [a.label for a in s.apps]}, ensure_ascii=False))
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "model": getattr(llm, "model", "?")}
+        return {"ok": True, "model": getattr(llm, "model", "?"), "policy": pol.NAME}
 
     @app.post("/v1/sessions", dependencies=[Depends(auth)])
     def start(req: StartRequest):
@@ -175,27 +182,42 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None)
             return StepResponse(done=True, status="stopped", step=len(s.steps))
         if req.reply is not None and s.steps:
             s.steps[-1].user_text = req.reply
+            log(s, {"step": len(s.steps) - 1, "event": "user_text", "source": "user", "text": req.reply})
         if len(s.steps) >= MAX_STEPS:
             finish(s, "max_steps")
             return StepResponse(done=True, status="max_steps", step=len(s.steps))
 
-        png = _normalize_png(req.screenshot_b64)
         n = len(s.steps)
+        if pol.ANSWER_ENDS and s.steps and s.steps[-1].args.get("action") == "answer":
+            log(s, {"step": n, "event": "answer_ends_task"})
+            finish(s, "success")
+            return StepResponse(done=True, status="success", step=n)
+        png = _normalize_png(req.screenshot_b64)
+        seen = s.guard.observe(png)
+        if seen["stuck"]:
+            log(s, {"step": n, "event": "stuck", "reason": seen["stuck"]})
+            finish(s, "stuck")
+            return StepResponse(done=True, status="stuck", thinking=seen["stuck"], step=n)
+        if seen["no_effect"] and NO_EFFECT_HINT and s.steps and not s.steps[-1].user_text:
+            s.steps[-1].user_text = NO_EFFECT_TEXT
+            log(s, {"step": n - 1, "event": "user_text", "source": "hint", "text": NO_EFFECT_TEXT})
         (s.dir / f"step_{n:02d}.png").write_bytes(png)
         labels = [a.label for a in s.apps]
         t0 = time.time()
         try:
-            raw, thinking, args = maiui.predict(llm, maiui.system_prompt(labels), s.task, s.steps, png)
+            raw, thinking, args = maiui.predict(llm, pol.system_prompt(labels), s.task, s.steps, png, policy=pol)
             action = to_device_action(args, s)
         except Exception as e:  # noqa: BLE001 - model or parse failure: stop cleanly, keep the log
             log(s, {"step": n, "error": str(e)})
             finish(s, "error")
             return StepResponse(done=True, status="error", thinking=str(e), step=n)
         s.steps.append(maiui.Step(png=png, thinking=thinking, args=args))
+        s.guard.acted(args)
         confirm = safety.needs_confirmation(action, req.elements)
         done = action["type"] == "terminate"
         log(s, {"step": n, "raw": raw, "args": args, "action": action, "confirm": confirm,
-                "latency_s": round(time.time() - t0, 2), "n_elements": len(req.elements)})
+                "latency_s": round(time.time() - t0, 2), "n_elements": len(req.elements),
+                "prev_no_effect": seen["no_effect"]})
         status = "running"
         if done:
             status = "success" if action.get("status") == "success" else "fail"

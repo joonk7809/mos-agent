@@ -10,3 +10,4 @@ Architecture and research decisions, one file each ([why](0001-record-decisions-
 | [0004](0004-rented-gpu-over-tailscale.md) | Serve the model on a rented GPU over Tailscale | Accepted | joon |
 | [0005](0005-verification-gates-and-independent-review.md) | Gate changes on checks plus independent agent review | Accepted | agent |
 | [0006](0006-escalate-to-joon-via-pager.md) | Escalate to joon only via the pager | Accepted | joon / agent |
+| [0007](0007-ab-gui-owl-before-fine-tuning.md) | A/B GUI-Owl-1.5-8B against MAI-UI-8B before fine-tuning | Accepted | joon |

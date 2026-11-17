@@ -43,9 +43,25 @@ def label(e: dict | None) -> str:
     return " ".join(p for p in (e.get("text"), e.get("desc"), rid) if p).strip()
 
 
+SHORT_DRAG_PX = 30
+
+
 def needs_confirmation(action: dict, elements: list[dict]) -> str | None:
     """Return a short human reason if this device action should be confirmed, else None."""
     kind = action.get("type")
+    if kind == "drag":
+        # A drag that barely moves is a tap (it clicks on lift), and one that starts on a
+        # Send/Pay control can be a "slide to confirm": both are judged by where they start.
+        x1, y1, x2, y2 = action["x1"], action["y1"], action["x2"], action["y2"]
+        text = label(element_at(elements, x1, y1))
+        if text and RISKY_WORDS.search(text):
+            short = abs(x2 - x1) + abs(y2 - y1) < SHORT_DRAG_PX
+            return f'{"Tap" if short else "Drag from"} "{text[:60]}"'
+    if kind == "key" and str(action.get("name", "")).lower() == "enter":
+        # Enter in a chat box usually sends the message.
+        focused = next((e for e in elements if e.get("focused") and e.get("editable")), None)
+        if focused and not re.search(r"\bsearch\b", label(focused), re.IGNORECASE):
+            return "Press Enter in a text field (this may send it)"
     if kind in ("click", "long_press"):
         target = element_at(elements, action["x"], action["y"])
         text = label(target)
