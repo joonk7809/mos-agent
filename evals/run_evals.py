@@ -99,6 +99,11 @@ BRIDGE_PACKAGE = "dev.mos.bridge"
 TASK_END = re.compile(r"MOS_TASK_END status=(\w+) steps=(\d+)")
 
 
+def is_emulator(shell: Shell) -> bool:
+    """Same rule as the app's EvalReceiver and rom/emulator/install_bridge.sh."""
+    return "1" in (shell("getprop ro.kernel.qemu").strip(), shell("getprop ro.boot.qemu").strip())
+
+
 def set_bridge(shell: Shell, state: str) -> None:
     """Enable or disable the MOS bridge for the next run ('keep' leaves it as the snapshot has it)."""
     if state == "on":
@@ -159,6 +164,8 @@ def main() -> None:
     dev = AdbDevice(serial=a.serial)
     # `; true`: a check like `grep -c` exits 1 when it counts 0, which adb passes back as an error.
     shell: Shell = lambda cmd: dev._shell(f"{cmd}; true")
+    if (a.driver == "app" or a.bridge != "keep") and not is_emulator(shell):
+        raise SystemExit("--driver app / --bridge only run on an emulator; the selected device isn't one")
     out_dir = Path("runs") / "evals" / time.strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"git": git_sha(), "server": a.server, "modes": a.modes, "repeats": a.repeats,

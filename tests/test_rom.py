@@ -247,16 +247,31 @@ def test_build_script_supports_emulator_images() -> None:
 
 
 def test_eval_receiver_is_locked_down() -> None:
-    m = ET.parse(APP / "AndroidManifest.xml").getroot()
+    main_manifest = ET.parse(APP / "AndroidManifest.xml").getroot()
+    assert not main_manifest.findall("application/receiver")  # release APKs carry no eval driver
+    assert not (APP / "kotlin" / "dev" / "mos" / "agent" / "EvalReceiver.kt").exists()
+    debug = ROOT / "android" / "app" / "src" / "debug"
+    m = ET.parse(debug / "AndroidManifest.xml").getroot()
     recv = [r for r in m.findall("application/receiver") if r.get(f"{A}name") == ".EvalReceiver"]
     assert len(recv) == 1 and recv[0].get(f"{A}permission") == "android.permission.DUMP"
-    kt = (APP / "kotlin" / "dev" / "mos" / "agent" / "EvalReceiver.kt").read_text()
+    kt = (debug / "kotlin" / "dev" / "mos" / "agent" / "EvalReceiver.kt").read_text()
     assert "return debuggable && isEmulator()" in kt
+    assert 'prop("ro.kernel.qemu") == "1" || prop("ro.boot.qemu") == "1"' in kt
+    assert "FINGERPRINT" not in kt.split("fun isEmulator", 1)[1]
     assert "if (!allowed(context))" in kt.split("override fun onReceive", 1)[1].split("when", 1)[0]
     assert 'getStringExtra("token")' not in kt and 'getStringExtra("server")' not in kt
     loop = (APP / "kotlin" / "dev" / "mos" / "agent" / "AgentLoop.kt").read_text()
     assert "if (!eval) return service.overlay.confirm(reason)" in loop
     assert "private val eval: Boolean = false" in loop
-    svc = (APP / "kotlin" / "dev" / "mos" / "agent" / "MosAccessibilityService.kt").read_text()
     main = (APP / "kotlin" / "dev" / "mos" / "agent" / "MainActivity.kt").read_text()
-    assert "eval = true" not in main and "eval: Boolean = false" in svc
+    assert "eval = true" not in main
+
+
+def test_debug_apps_never_get_the_phone_key() -> None:
+    gradle = (ROOT / "android" / "app" / "build.gradle.kts").read_text()
+    debug = gradle.split("        debug {", 1)[1].split("}", 1)[0]
+    assert 'findByName("mosDebug")' in debug and 'findByName("mos")' not in debug
+    sh = (ROM / "build.sh").read_text()
+    assert "[[ $EMULATOR == 1 ]] && APP_KEY_NAME=mos-app-emulator" in sh
+    emu = sh.split("if [[ $EMULATOR == 1 ]]; then\n    ANDROID_HOME", 1)[1].split("else", 1)[0]
+    assert "MOS_DEBUG_KEYSTORE=$APP_KS" in emu and "assembleDebug" in emu

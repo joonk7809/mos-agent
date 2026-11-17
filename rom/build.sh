@@ -174,10 +174,14 @@ filegroup(
 )
 EOF
 
-APP_KS=$MOS_KEYS/mos-app.jks
-APP_PASS_FILE=$MOS_KEYS/mos-app.pass
+# Phones and emulator images use different app keys: emulator images carry a debuggable app
+# (for the eval driver), which must never be installable over the app on a real MOS phone.
+APP_KEY_NAME=mos-app
+[[ $EMULATOR == 1 ]] && APP_KEY_NAME=mos-app-emulator
+APP_KS=$MOS_KEYS/$APP_KEY_NAME.jks
+APP_PASS_FILE=$MOS_KEYS/$APP_KEY_NAME.pass
 if [[ ! -f $APP_KS ]]; then
-  log "generating the MOS app signing key (first run only)"
+  log "generating the $APP_KEY_NAME signing key (first run only)"
   (umask 077; openssl rand -hex 24 > "$APP_PASS_FILE")
   keytool -genkeypair -keystore "$APP_KS" -storetype PKCS12 -alias mos -keyalg RSA -keysize 4096 \
     -validity 10000 -dname "CN=MOS app, O=MOS" \
@@ -201,8 +205,13 @@ fi
 "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "platforms;android-35" "build-tools;35.0.0" >/dev/null
 (
   cd "$REPO_ROOT/android"
-  ANDROID_HOME=$SDK MOS_KEYSTORE=$APP_KS MOS_KEYSTORE_PASSWORD_FILE=$APP_PASS_FILE \
-    ./gradlew --no-daemon -q ":app:assemble${APP_VARIANT^}"
+  if [[ $EMULATOR == 1 ]]; then
+    ANDROID_HOME=$SDK MOS_DEBUG_KEYSTORE=$APP_KS MOS_DEBUG_KEYSTORE_PASSWORD_FILE=$APP_PASS_FILE \
+      ./gradlew --no-daemon -q :app:assembleDebug
+  else
+    ANDROID_HOME=$SDK MOS_KEYSTORE=$APP_KS MOS_KEYSTORE_PASSWORD_FILE=$APP_PASS_FILE \
+      ./gradlew --no-daemon -q :app:assembleRelease
+  fi
 )
 APK=$REPO_ROOT/android/app/build/outputs/apk/$APP_VARIANT/app-$APP_VARIANT.apk
 [[ -f $APK ]] || { echo "app build produced no $APK" >&2; exit 1; }
@@ -252,7 +261,11 @@ cp "$zip_path" "$DEST/"
 for img in boot dtbo init_boot vendor_boot vendor_kernel_boot recovery; do
   [[ -f $OUT_DIR/$img.img ]] && cp "$OUT_DIR/$img.img" "$DEST/"
 done
-cp "$APK" "$DEST/MosAgent.apk"
+if [[ $EMULATOR == 1 ]]; then
+  cp "$APK" "$DEST/MosAgent-emulator-debug.apk"  # emulator key: won't install over a phone's app
+else
+  cp "$APK" "$DEST/MosAgent.apk"
+fi
 (cd "$DEST" && sha256sum -- * > SHA256SUMS)
 
 log "done: $DEST"

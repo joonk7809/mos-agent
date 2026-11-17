@@ -65,3 +65,14 @@ def test_set_bridge() -> None:
     assert sh.cmds == ["pm enable dev.mos.bridge", "pm disable-user --user 0 dev.mos.bridge"]
     with pytest.raises(ValueError):
         set_bridge(sh, "maybe")
+
+
+def test_is_emulator_reads_the_qemu_props() -> None:
+    from evals.run_evals import is_emulator
+
+    def shell_for(props: dict[str, str]):
+        return lambda cmd: props.get(cmd.split()[-1], "") + "\n"
+
+    assert is_emulator(shell_for({"ro.kernel.qemu": "1"}))
+    assert is_emulator(shell_for({"ro.boot.qemu": "1"}))
+    assert not is_emulator(shell_for({"ro.product.name": "sdk_phone64"}))

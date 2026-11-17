@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
-import android.os.Build
 import android.util.Log
 
 /**
@@ -14,8 +13,8 @@ import android.util.Log
  *   adb shell am broadcast -n dev.mos.agent/.EvalReceiver -a dev.mos.agent.EVAL_RUN --es task '...'
  *
  * Eval runs approve confirmations automatically, so this only works where that is harmless:
- * the broadcast needs DUMP (adb shell), the build must be debuggable, and the device must be
- * an emulator. The server URL and token come from the app's saved settings, never the intent.
+ * it exists only in debug builds (src/debug), the broadcast needs DUMP (adb shell), the build
+ * must be debuggable, and the kernel must say it is the emulator (ro.kernel.qemu / ro.boot.qemu). The server URL and token come from the app's saved settings, never the intent.
  * The harness waits for the "MOS_TASK_END" log line.
  */
 class EvalReceiver : BroadcastReceiver() {
@@ -56,10 +55,19 @@ class EvalReceiver : BroadcastReceiver() {
             return debuggable && isEmulator()
         }
 
-        /** Goldfish/ranchu (Android Emulator) and Cuttlefish. */
-        fun isEmulator(): Boolean =
-            Build.HARDWARE in setOf("ranchu", "goldfish", "cutf_cvm", "vsoc_x86_64", "vsoc_arm64") ||
-                Build.FINGERPRINT.startsWith("generic") ||
-                Build.PRODUCT.contains("sdk_phone") || Build.PRODUCT.contains("cf_phone")
+        /**
+         * The Android Emulator and Cuttlefish set these from the kernel command line. Build
+         * names (FINGERPRINT "generic", PRODUCT "sdk") are not used: some unbranded phones and
+         * GSIs carry them too. Same rule as rom/emulator/install_bridge.sh and run_evals.
+         */
+        fun isEmulator(): Boolean = prop("ro.kernel.qemu") == "1" || prop("ro.boot.qemu") == "1"
+
+        private fun prop(name: String): String = try {
+            val p = ProcessBuilder("getprop", name).redirectErrorStream(true).start()
+            p.inputStream.bufferedReader().use { it.readText().trim() }.also { p.waitFor() }
+        } catch (e: java.io.IOException) {
+            Log.w(TAG, "getprop $name failed", e)
+            ""
+        }
     }
 }

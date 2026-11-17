@@ -40,7 +40,7 @@ unzip sdk-repo-*system-images*.zip -d "$ANDROID_HOME/system-images/android-mos/l
 emulator -avd <any-avd> -sysdir "$ANDROID_HOME/system-images/android-mos/lineage/<abi>"
 ```
 
-The bridge and app are already inside. Open MOS, tap **Turn on the agent**, and run the same evals as the quick path. Emulator builds preinstall a debug build of the app, signed with the MOS app key from `MOS_KEYS`, so the eval driver works and the bridge trusts it. To update the app, use the `MosAgent.apk` from the output folder; a debug build signed with any other key won't get the bridge.
+The bridge and app are already inside. Open MOS, tap **Turn on the agent**, and run the same evals as the quick path. Emulator builds preinstall a debug build of the app so the eval driver works. It's signed with a separate emulator-only key (`MOS_KEYS/mos-app-emulator.jks`), which is the key the bridge in that image trusts. That way the debuggable app can never install over the app on a real MOS phone. To update it, use `MosAgent-emulator-debug.apk` from the output folder.
 
 ## What emulators can't tell us
 
