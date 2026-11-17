@@ -38,6 +38,10 @@ android {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("mos") ?: signingConfigs.getByName("debug")
         }
+        debug {
+            // Emulator ROM builds preinstall a debug app (for the eval driver) that the bridge must trust.
+            signingConfig = signingConfigs.findByName("mos") ?: signingConfigs.getByName("debug")
+        }
     }
 
     compileOptions {

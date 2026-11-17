@@ -12,4 +12,5 @@ Architecture and research decisions, one file each ([why](0001-record-decisions-
 | [0006](0006-escalate-to-joon-via-pager.md) | Escalate to joon only via the pager | Accepted | joon / agent |
 | [0007](0007-ab-gui-owl-before-fine-tuning.md) | A/B GUI-Owl-1.5-8B against MAI-UI-8B before fine-tuning | Accepted | joon |
 | [0008](0008-lineageos-rom-with-privileged-bridge.md) | Build a LineageOS MOS ROM with a small privileged input bridge | Accepted | joon / agent |
-| [0009](0009-first-rom-device.md) | First MOS ROM device: Pixel 8a (akita) | Proposed (pager #6) | joon (pending) |
+| [0009](0009-first-rom-device.md) | First MOS ROM device: Pixel 7a (lynx) | Accepted (pager #6) | joon |
+| [0010](0010-emulator-first.md) | Prove MOS on emulators before buying a phone | Accepted | joon / agent |

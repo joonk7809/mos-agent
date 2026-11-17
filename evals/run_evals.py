@@ -3,6 +3,12 @@
     python -m evals.run_evals --server http://mos-gpu:8080 --token $MOS_TOKEN --repeats 3   # MAI-UI via the MOS server
     python -m evals.run_evals --modes screenshot tree both som --repeats 3                  # Claude baseline
     python -m evals.run_evals --server ... --only settings-dark-mode settings-wifi-off      # a subset
+    python -m evals.run_evals --driver app --bridge on  --server ... --repeats 3   # through the phone app,
+    python -m evals.run_evals --driver app --bridge off --server ... --repeats 3   # with / without the bridge
+
+`--driver app` runs each task through the MOS app on the emulator (EvalReceiver; the app
+uses its saved server and token) instead of driving the emulator over ADB. `--bridge`
+enables or disables the MOS system bridge after each snapshot load (rom/emulator/README.md).
 
 Each task has one or more checks: an `adb shell` command and what its output must be:
     "expect": exact output        "expect_contains": substring (case-insensitive)
@@ -17,6 +23,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable
@@ -86,6 +94,37 @@ def load_tasks(path: str, only: list[str] | None = None) -> list[dict]:
     return tasks
 
 
+APP_RECEIVER = "dev.mos.agent/.EvalReceiver"
+BRIDGE_PACKAGE = "dev.mos.bridge"
+TASK_END = re.compile(r"MOS_TASK_END status=(\w+) steps=(\d+)")
+
+
+def set_bridge(shell: Shell, state: str) -> None:
+    """Enable or disable the MOS bridge for the next run ('keep' leaves it as the snapshot has it)."""
+    if state == "on":
+        shell(f"pm enable {BRIDGE_PACKAGE}")
+    elif state == "off":
+        shell(f"pm disable-user --user 0 {BRIDGE_PACKAGE}")
+    elif state != "keep":
+        raise ValueError(f"bridge state must be on, off or keep, not {state!r}")
+
+
+def run_app(shell: Shell, task: str, timeout_s: float = 600, poll_s: float = 2.0,
+            sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> dict:
+    """Run one task through the phone app and wait for its MOS_TASK_END log line."""
+    shell("logcat -c")
+    shell(f"am broadcast -n {APP_RECEIVER} -a dev.mos.agent.EVAL_RUN --es task {shlex.quote(task)}")
+    deadline = clock() + timeout_s
+    while clock() < deadline:
+        m = TASK_END.search(shell("logcat -d -s MOS:I"))
+        if m:
+            status = m.group(1)
+            return {"status": status, "self_report": status == "success", "steps": int(m.group(2))}
+        sleep(poll_s)
+    shell(f"am broadcast -n {APP_RECEIVER} -a dev.mos.agent.EVAL_STOP")
+    return {"status": "timeout", "self_report": False, "steps": None}
+
+
 def git_sha() -> str:
     try:
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -104,8 +143,15 @@ def main() -> None:
     p.add_argument("--server", help="MOS server URL: evaluate the server's model instead of the Claude agent")
     p.add_argument("--token", default="")
     p.add_argument("--label", default="", help="free-text note saved with the results (e.g. 'hint on')")
+    p.add_argument("--driver", choices=["adb", "app"], default="adb",
+                   help="adb: drive the emulator from here; app: run tasks through the MOS app on it")
+    p.add_argument("--bridge", choices=["on", "off", "keep"], default="keep",
+                   help="enable/disable the MOS system bridge after each snapshot load")
+    p.add_argument("--timeout", type=float, default=600, help="seconds per app-driven run")
     a = p.parse_args()
-    if a.server:
+    if a.driver == "app":
+        a.modes = ["app-bridge-" + a.bridge]
+    elif a.server:
         a.modes = ["server"]
 
     from mos.device import AdbDevice  # imported here so the scoring helpers above stay importable without adb
@@ -116,6 +162,7 @@ def main() -> None:
     out_dir = Path("runs") / "evals" / time.strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"git": git_sha(), "server": a.server, "modes": a.modes, "repeats": a.repeats,
+            "driver": a.driver, "bridge": a.bridge,
             "snapshot": a.snapshot, "label": a.label, "tasks": [t["id"] for t in tasks],
             # since this PR the emulator client sends phone-like images; older baselines used full PNGs
             "screenshots": "jpeg90, long edge <= 1600 (like the phone app)" if a.server else "full png"}
@@ -139,6 +186,10 @@ def main() -> None:
                                        ["emu", "avd", "snapshot", "load", a.snapshot], check=False)
                         time.sleep(2)  # let the restored UI settle
                     row = {"mode": mode, "task": t["id"], "rep": rep}
+                    try:
+                        set_bridge(shell, a.bridge)
+                    except Exception as e:  # noqa: BLE001 - recorded on the row
+                        row["note"] = f"bridge toggle failed: {e}"
                     try:
                         before = snapshot_outputs(shell, t)
                     except Exception as e:  # noqa: BLE001 - device trouble shouldn't end the whole eval
@@ -172,6 +223,8 @@ def main() -> None:
 
 
 def run_agent(a, dev, mode: str, t: dict) -> dict:
+    if a.driver == "app":
+        return run_app(lambda cmd: dev._shell(f"{cmd}; true"), t["task"], timeout_s=a.timeout)
     if a.server:
         from mos.remote import RemoteRunner, http_post
         runner = RemoteRunner(dev, http_post(a.server, a.token), confirm=lambda _r: True,

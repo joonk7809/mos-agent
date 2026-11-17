@@ -33,6 +33,19 @@
             </intent-filter>
         </activity>
 
+        <!-- Eval driver for evals/run_evals.py (driver "app"). Only the shell (adb) and the system
+             hold DUMP, and EvalReceiver ignores everything unless this is a debuggable build
+             running on an emulator. -->
+        <receiver
+            android:name=".EvalReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="dev.mos.agent.EVAL_RUN" />
+                <action android:name="dev.mos.agent.EVAL_STOP" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".MosAccessibilityService"
             android:exported="true"
