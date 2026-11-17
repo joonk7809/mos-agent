@@ -19,8 +19,8 @@ import argparse
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from evals.stats import summarize
 
@@ -62,8 +62,8 @@ def snapshot_outputs(shell: Shell, task: dict) -> list[str]:
 
 def task_passes(shell: Shell, task: dict, before: list[str] | None = None) -> bool:
     cs = checks_of(task)
-    before = before or [None] * len(cs)
-    return all(passes(c, shell(c["check"]), b) for c, b in zip(cs, before))
+    baseline: list[str | None] = list(before) if before else [None] * len(cs)
+    return all(passes(c, shell(c["check"]), b) for c, b in zip(cs, baseline, strict=True))
 
 
 def already_done(task: dict, before: list[str]) -> bool:
@@ -71,11 +71,11 @@ def already_done(task: dict, before: list[str]) -> bool:
     cs = checks_of(task)
     if any(c.get("expect_changed") for c in cs):
         return False
-    return all(passes(c, out) for c, out in zip(cs, before))
+    return all(passes(c, out) for c, out in zip(cs, before, strict=True))
 
 
 def load_tasks(path: str, only: list[str] | None = None) -> list[dict]:
-    tasks = [json.loads(l) for l in open(path) if l.strip()]
+    tasks = [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
     if only:
         missing = set(only) - {t["id"] for t in tasks}
         if missing:

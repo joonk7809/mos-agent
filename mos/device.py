@@ -4,8 +4,9 @@ from __future__ import annotations
 import shlex
 import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Protocol
 
 KEYCODES = {
     "back": "KEYCODE_BACK",

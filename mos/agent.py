@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 import anthropic
 
@@ -140,7 +140,7 @@ class Agent:
                 try:
                     note = self._act(call.name, call.input, obs)
                     is_error = False
-                except Exception as e:  # report the failure to the model, don't crash
+                except Exception as e:  # noqa: BLE001 - report the failure to the model, don't crash
                     note, is_error = f"Error: {e}", True
                 traj.write(json.dumps({"step": step, "tool": call.name, "input": call.input,
                                        "result": note, "error": is_error, "latency_s": round(latency, 2),
@@ -177,9 +177,8 @@ class Agent:
         return round(inp["x"]), round(inp["y"])
 
     def _gate(self, name: str, inp: dict) -> None:
-        if inp.get("irreversible"):
-            if not self.confirm(f"Agent wants to {name}: {inp.get('reason', '')} {json.dumps(inp)}"):
-                raise PermissionError("user declined this action; choose another approach or ask_user")
+        if inp.get("irreversible") and not self.confirm(f"Agent wants to {name}: {inp.get('reason', '')} {json.dumps(inp)}"):
+            raise PermissionError("user declined this action; choose another approach or ask_user")
 
     def _act(self, name: str, inp: dict, obs: Observation) -> str:
         d = self.device

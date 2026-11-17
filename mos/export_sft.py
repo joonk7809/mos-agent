@@ -94,7 +94,7 @@ def main() -> None:
             loaded = load_session(d)
             if not loaded or (loaded[0]["status"] != "success" and not a.include_failed):
                 continue
-            if policies.get(loaded[0].get("policy")).NAME != want:
+            if want != policies.get(loaded[0].get("policy")).NAME:
                 continue
             for sample in session_samples(d):
                 f.write(json.dumps(sample, ensure_ascii=False) + "\n")

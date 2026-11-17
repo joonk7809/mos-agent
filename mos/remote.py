@@ -14,8 +14,8 @@ import json
 import os
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from . import uitree
 from .device import AdbDevice, Device
@@ -52,7 +52,7 @@ def phone_like(png: bytes) -> bytes:
     img = Image.open(io.BytesIO(png)).convert("RGB")
     scale = MAX_SCREENSHOT_EDGE / max(img.size)
     if scale < 1:
-        img = img.resize((round(img.width * scale), round(img.height * scale)), Image.BILINEAR)
+        img = img.resize((round(img.width * scale), round(img.height * scale)), Image.Resampling.BILINEAR)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=90)
     return buf.getvalue()
@@ -131,6 +131,8 @@ class RemoteRunner:
             if r["done"]:
                 self.log(f"done: {r['status']}  (session {sid})")
                 return r["status"]
+            if a is None:
+                raise RuntimeError(f"server returned no action for a running session: {r}")
             if r.get("confirm") and not self.confirm(r["confirm"]):
                 extra = {"declined": True}
                 continue

@@ -14,6 +14,12 @@ RISKY_WORDS = re.compile(
     r"post|publish|share|transfer|submit|confirm|book|reserve|subscribe|call|dial|uninstall|"
     r"reset|factory|sign out|log out|accept|agree|install)\b", re.IGNORECASE)
 
+# A card number as people type it: 12-19 digits in one run, or 4-digit groups (Amex 4-6-5)
+# split by one consistent space/dash/dot (or a doubled one). Groups keep dates and phone numbers from matching.
+_SEP = r"[ .\-\u2013\u2014]{1,2}"
+CARD_NUMBER = re.compile(
+    rf"(?<!\d)(?:\d{{12,19}}|\d{{4}}({_SEP})\d{{4}}\1\d{{4}}\1\d{{1,7}}|\d{{4}}({_SEP})\d{{6}}\2\d{{5}})(?!\d)")
+
 
 def element_at(elements: list[dict], x: int, y: int) -> dict | None:
     """Smallest element whose bounds contain (x, y)."""
@@ -49,6 +55,6 @@ def needs_confirmation(action: dict, elements: list[dict]) -> str | None:
         focused = next((e for e in elements if e.get("focused") and e.get("editable")), None)
         if focused and focused.get("password"):
             return "Type into a password field"
-        if re.search(r"\b\d{12,19}\b", action.get("text", "").replace(" ", "")):
+        if CARD_NUMBER.search(action.get("text", "")):
             return "Type what looks like a card number"
     return None

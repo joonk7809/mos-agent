@@ -55,14 +55,14 @@ def observe(device: Device, mode: str) -> Observation:
         _draw_marks(img, elements)
     scale = max(img.width, img.height) / MAX_EDGE
     if scale > 1:
-        img = img.resize((round(img.width / scale), round(img.height / scale)), Image.LANCZOS)
+        img = img.resize((round(img.width / scale), round(img.height / scale)), Image.Resampling.LANCZOS)
     else:
         scale = 1.0
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     try:
         app = device.current_app()
-    except Exception:
+    except Exception:  # noqa: BLE001 - foreground app is best-effort context
         app = ""
     return Observation(png=buf.getvalue(), scale=scale, elements=elements, app=app)
 

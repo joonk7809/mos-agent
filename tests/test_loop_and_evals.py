@@ -1,5 +1,4 @@
 """Tests for stuck detection, stricter parsing/retries, SFT user text, and the eval scoring."""
-import base64
 import io
 import json
 from pathlib import Path
@@ -62,8 +61,8 @@ def _phone_screen(draw) -> bytes:
 def test_small_counter_steps_and_colour_only_changes_count_as_changes():
     font = ImageFont.load_default(size=20)  # ~12sp on a 720-wide screenshot
     for n in range(1, 26):
-        a = _phone_screen(lambda d: d.text((300, 800), str(n), fill=(0, 0, 0), font=font))
-        b = _phone_screen(lambda d: d.text((300, 800), str(n + 1), fill=(0, 0, 0), font=font))
+        a = _phone_screen(lambda d, n=n: d.text((300, 800), str(n), fill=(0, 0, 0), font=font))
+        b = _phone_screen(lambda d, n=n: d.text((300, 800), str(n + 1), fill=(0, 0, 0), font=font))
         assert not loopguard.same_screen(loopguard.signature(a), loopguard.signature(b)), n
     red = _phone_screen(lambda d: d.rounded_rectangle((40, 1000, 240, 1060), 20, fill=(200, 80, 80)))
     green = _phone_screen(lambda d: d.rounded_rectangle((40, 1000, 240, 1060), 20, fill=(80, 140, 80)))
@@ -84,7 +83,8 @@ def test_guard_flags_no_effect_and_stuck_after_repeats():
 
 def test_guard_resets_when_action_works_or_changes():
     g = loopguard.LoopGuard(max_repeats=2)
-    g.observe(A); g.acted(CLICK)
+    g.observe(A)
+    g.acted(CLICK)
     assert g.observe(A)["no_effect"]
     g.acted(CLICK)
     assert g.observe(B)["stuck"] is None             # this time the tap worked
@@ -259,6 +259,7 @@ def test_compare_calls_only_clear_gaps():
 
 def test_compare_cli_end_to_end(tmp_path, capsys, monkeypatch):
     import sys
+
     from evals import compare
     for name, wins in (("a", 0), ("b", 1)):
         d = tmp_path / name

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
+from typing import Any
 
 from PIL import Image, ImageChops
 
@@ -33,7 +34,7 @@ EFFECTFUL = {"click", "long_press", "swipe", "drag", "type", "system_button", "o
 def signature(png: bytes) -> bytes:
     img = Image.open(io.BytesIO(png)).convert("RGB")
     w, h = img.size
-    img = img.crop((0, int(h * STATUS_BAR), w, h)).resize(THUMB, Image.BOX)
+    img = img.crop((0, int(h * STATUS_BAR), w, h)).resize(THUMB, Image.Resampling.BOX)
     return img.tobytes()
 
 
@@ -80,7 +81,7 @@ class LoopGuard:
         Returns {"no_effect": bool, "stuck": str | None} about the previous action.
         """
         sig = signature(png)
-        out = {"no_effect": False, "stuck": None}
+        out: dict[str, Any] = {"no_effect": False, "stuck": None}
         if self._prev_sig is not None and self._prev_args is not None:
             unchanged = same_screen(sig, self._prev_sig)
             kind = self._prev_args.get("action")

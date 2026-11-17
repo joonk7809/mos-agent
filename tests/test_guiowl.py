@@ -4,14 +4,14 @@ import copy
 import json
 
 import pytest
+from fastapi.testclient import TestClient
 
 from mos import guiowl, maiui, policies
 from mos.export_sft import session_samples
 from mos.fake import FakeDevice
 from mos.remote import RemoteRunner
-from tests.test_fnf import APPS, PNG, ScriptedLLM
 from mos.server import create_app
-from fastapi.testclient import TestClient
+from tests.test_fnf import APPS, PNG, ScriptedLLM
 
 
 def owl(args: dict, action: str = "Tap the button") -> str:
@@ -157,7 +157,9 @@ def test_export_trains_on_hand_corrected_args(tmp_path):
 
 def test_emulator_screenshots_are_sent_like_the_phone_app_sends_them():
     import io
+
     from PIL import Image
+
     from mos.remote import phone_like
     img = Image.open(io.BytesIO(phone_like(FakeDevice().png)))
     assert img.format == "JPEG" and img.size == (720, 1600)
@@ -205,6 +207,7 @@ def test_sampling_params_follow_the_policy(monkeypatch, tmp_path):
 
 def test_export_keeps_each_policys_sessions_apart(tmp_path, monkeypatch):
     import sys
+
     from mos import export_sft
     from tests.test_fnf import resp
     for pol, reply in (("guiowl", owl({"action": "terminate", "status": "success"})),

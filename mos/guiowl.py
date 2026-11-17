@@ -176,7 +176,7 @@ def build_messages(system: str, task: str, steps: list[Step], current_png: bytes
     head = _image(pngs[0])
     head["content"].insert(0, {"type": "text", "text": _instruction(task, older)})
     msgs.append(head)
-    for s, png in zip(steps[first:], pngs[1:]):
+    for s, png in zip(steps[first:], pngs[1:], strict=True):
         msgs.append({"role": "assistant", "content": [{"type": "text", "text": format_response(s.thinking, s.args)}]})
         if s.user_text:
             msgs.append({"role": "user", "content": [{"type": "text", "text": s.user_text}]})

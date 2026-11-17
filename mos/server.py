@@ -103,7 +103,7 @@ def to_device_action(args: dict, s: Session) -> dict:
         x, y = maiui.to_pixels(args["coordinate"], w, h)
         return {"type": kind, "x": x, "y": y}
     if kind == "swipe":
-        out = {"type": "swipe", "direction": str(args.get("direction", "up")).lower()}
+        out: dict = {"type": "swipe", "direction": str(args.get("direction", "up")).lower()}
         if "coordinate" in args:
             out["x"], out["y"] = maiui.to_pixels(args["coordinate"], w, h)
         return out
@@ -207,7 +207,7 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
         try:
             raw, thinking, args = maiui.predict(llm, pol.system_prompt(labels), s.task, s.steps, png, policy=pol)
             action = to_device_action(args, s)
-        except Exception as e:  # model or parse failure: stop cleanly, keep the log
+        except Exception as e:  # noqa: BLE001 - model or parse failure: stop cleanly, keep the log
             log(s, {"step": n, "error": str(e)})
             finish(s, "error")
             return StepResponse(done=True, status="error", thinking=str(e), step=n)
