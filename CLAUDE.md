@@ -41,4 +41,5 @@ Hooks in `.claude/settings.json` enforce some of this: ruff runs on every edited
 - MAI-UI emits coordinates in 0..999 (`maiui.SCALE`); the server maps them to pixels. The phone only ever sees pixels.
 - vLLM is pinned to 0.11.0 per MAI-UI's instructions; don't bump it casually.
 - `mos/agent.py` is the old Claude-driven baseline, kept for comparison. The product path is `server.py` + `maiui.py`.
+- `rom/` is the LineageOS MOS ROM (ADR 0008). It only builds on a rented build box (`rom/build.sh`); here, `tests/test_rom.py` checks its wiring. `IMosBridge.aidl` exists in two places (ROM and app) and must stay byte-identical; append methods only. Never commit anything from `MOS_KEYS`.
 - Never edit `evals/tasks.jsonl` checks to make a run pass; never add `skip`/`xfail` or loosen an assertion to get green.

@@ -6,3 +6,12 @@ runs/
 .hypothesis/
 .mypy_cache/
 .ruff_cache/
+
+# Signing material (MOS_KEYS) never goes in git
+*.jks
+*.pk8
+*.keystore
+mos-keys/
+rom/vendor-extra/MosAgent/*.apk
+*.pass
+*.x509.pem

@@ -1,0 +1,31 @@
+// MOS bridge: a tiny platform-signed system app that injects input for the MOS agent app.
+// See docs/decisions/0008-lineageos-rom-with-privileged-bridge.md for why it is separate
+// from the agent app.
+
+android_app {
+    name: "MosBridge",
+    srcs: [
+        "src/**/*.java",
+        "aidl/**/*.aidl",
+    ],
+    aidl: {
+        local_include_dirs: ["aidl"],
+    },
+    resource_dirs: ["res"],
+    manifest: "AndroidManifest.xml",
+    platform_apis: true,      // InputManager.injectInputEvent is @hide
+    certificate: "platform",  // grants INJECT_EVENTS and WRITE_SECURE_SETTINGS
+    privileged: true,
+    system_ext_specific: true,
+    optimize: {
+        enabled: false,
+    },
+    required: ["privapp-permissions-mos.xml"],
+}
+
+prebuilt_etc {
+    name: "privapp-permissions-mos.xml",
+    src: "privapp-permissions-mos.xml",
+    sub_dir: "permissions",
+    system_ext_specific: true,
+}

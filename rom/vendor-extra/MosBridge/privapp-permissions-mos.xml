@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Privileged-permission allowlist for the MOS bridge (Lineage enforces the allowlist).
+     Platform signing already grants these; listing them keeps the grant explicit and
+     survives a future switch away from the platform certificate. -->
+<permissions>
+    <privapp-permissions package="dev.mos.bridge">
+        <permission name="android.permission.INJECT_EVENTS" />
+        <permission name="android.permission.WRITE_SECURE_SETTINGS" />
+        <permission name="android.permission.REAL_GET_TASKS" />
+    </privapp-permissions>
+</permissions>

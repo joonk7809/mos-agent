@@ -1,0 +1,13 @@
+// The MOS agent app, preinstalled. rom/build.sh builds it with the MOS app key and
+// copies it here as MosAgent.apk before the ROM build. It keeps its own signature
+// (presigned), so later sideloaded updates signed with the same key install over it.
+
+android_app_import {
+    name: "MosAgent",
+    apk: "MosAgent.apk",
+    presigned: true,
+    product_specific: true,
+    dex_preopt: {
+        enabled: false,
+    },
+}

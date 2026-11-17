@@ -1,6 +1,6 @@
 # 0003. The phone app uses only Android accessibility APIs
 
-- Status: Accepted
+- Status: Accepted for stock phones; amended for MOS ROM phones by [0008](0008-lineageos-rom-with-privileged-bridge.md)
 - Date: 2026-11-16
 - Deciders: joon (plan of record); agent (Shizuku detail)
 
