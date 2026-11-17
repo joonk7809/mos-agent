@@ -21,13 +21,10 @@ class MainActivity : Activity() {
     private lateinit var task: EditText
     private lateinit var state: TextView
 
-    // On a MOS ROM phone the bridge turns the agent's accessibility service on, so there's
-    // no trip through accessibility settings or Android's "restricted settings" step.
-    private val bridge = BridgeClient(this) { b ->
-        if (MosAccessibilityService.instance == null && b.call { it.enableAgentAccessibility() }) {
-            runOnUiThread { state.postDelayed({ refreshState() }, 1000) }
-        }
-    }
+    // On a MOS ROM phone the bridge can turn the agent's accessibility service on when the
+    // user taps the button, skipping accessibility settings and the "restricted settings" step.
+    // Never automatically: switching it off in Settings must keep it off.
+    private val bridge = BridgeClient(this)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -50,8 +47,8 @@ class MainActivity : Activity() {
             addView(TextView(this@MainActivity).apply { text = "MOS"; textSize = 24f })
             addView(state)
             addView(Button(this@MainActivity).apply {
-                text = "Open accessibility settings"
-                setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+                text = "Turn on the agent"
+                setOnClickListener { turnOnAgent() }
             })
             addView(server)
             addView(token)
@@ -81,6 +78,20 @@ class MainActivity : Activity() {
     private fun refreshState() {
         state.text = if (MosAccessibilityService.instance != null) "Agent service: on"
         else "Agent service: off. Turn on \"MOS agent\" in accessibility settings."
+    }
+
+    private fun turnOnAgent() {
+        if (MosAccessibilityService.instance != null) return toast("The agent is already on")
+        val enabled = try {
+            bridge.call { it.enableAgentAccessibility() } == true
+        } catch (e: IllegalStateException) {
+            false
+        }
+        if (enabled) {
+            state.postDelayed({ refreshState() }, 1000)
+        } else {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) // stock phones
+        }
     }
 
     private fun run() {

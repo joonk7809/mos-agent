@@ -13,6 +13,7 @@ import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import dev.mos.bridge.IMosBridge
 import dev.mos.core.AppInfo
 import dev.mos.core.DeviceAction
 import dev.mos.core.Element
@@ -178,13 +179,25 @@ class MosAccessibilityService : AccessibilityService() {
 
     /** One touch stroke: through the bridge on MOS ROM phones, else an accessibility gesture. */
     private fun move(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long) {
-        val viaBridge = if (x1 == x2 && y1 == y2) {
-            bridge.call { it.tap(x1, y1, ms) }
-        } else {
-            bridge.call { it.swipe(x1, y1, x2, y2, ms) }
+        val done = viaBridge("touch") {
+            if (x1 == x2 && y1 == y2) it.tap(x1, y1, ms) else it.swipe(x1, y1, x2, y2, ms)
         }
-        if (!viaBridge) gesture(stroke(x1, y1, x2, y2, ms))
+        if (!done) gesture(stroke(x1, y1, x2, y2, ms))
     }
+
+    /**
+     * True if the bridge did it; false if there is no bridge or it refused before injecting
+     * anything (caller uses accessibility). Throws for every other result: the input may
+     * have landed or the phone is in a state the agent must not drive, so no second attempt.
+     */
+    private fun viaBridge(what: String, f: (IMosBridge) -> Int): Boolean =
+        when (val r = bridge.call(f)) {
+            null, IMosBridge.REFUSED -> false
+            IMosBridge.OK -> true
+            IMosBridge.LOCKED -> throw IllegalStateException("phone is locked; $what not done")
+            IMosBridge.BLOCKED -> throw IllegalStateException("$what refused on a permission/install screen")
+            else -> throw IllegalStateException("$what may have partly happened (bridge result $r); not retrying")
+        }
 
     private fun stroke(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long): GestureDescription.StrokeDescription {
         val path = Path().apply { moveTo(x1.toFloat(), y1.toFloat()); lineTo(x2.toFloat(), y2.toFloat()) }
@@ -214,7 +227,7 @@ class MosAccessibilityService : AccessibilityService() {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, existing + text)
         }
         if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) &&
-            !bridge.call { it.text(text) }
+            !viaBridge("typing") { it.text(text) }
         ) {
             throw IllegalStateException("field did not accept text")
         }
@@ -229,7 +242,7 @@ class MosAccessibilityService : AccessibilityService() {
             "enter" -> KeyEvent.KEYCODE_ENTER
             else -> throw IllegalArgumentException("unknown key $name")
         }
-        if (bridge.call { it.key(code) }) return "key $name"
+        if (viaBridge("key $name") { it.key(code) }) return "key $name"
         val ok = when (name.lowercase()) {
             "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
             "home" -> performGlobalAction(GLOBAL_ACTION_HOME)

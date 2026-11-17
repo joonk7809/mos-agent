@@ -1,5 +1,6 @@
 package dev.mos.bridge;
 
+import android.app.ActivityManager;
 import android.app.KeyguardManager;
 import android.app.Service;
 import android.content.ComponentName;
@@ -21,13 +22,20 @@ import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 
+import java.util.Arrays;
+import java.util.List;
+
 /**
  * Binder service the MOS agent app binds to on MOS ROM phones.
  *
  * Kept deliberately small: it runs with the platform certificate, so everything here
  * is privileged code. It does no networking, keeps no state, and reads nothing from
  * the screen. Callers are restricted by dev.mos.permission.BRIDGE (signature|knownSigner,
- * pinned to the MOS app key) at bind time and again on every call.
+ * pinned to the MOS app key) at bind time and again on every call, and the calling
+ * package must be dev.mos.agent.
+ *
+ * Result codes (see IMosBridge.aidl): only REFUSED invites a fallback. Anything that may
+ * have injected input reports FAILED so the app never repeats an action another way.
  */
 public final class BridgeService extends Service {
     private static final String TAG = "MosBridge";
@@ -38,6 +46,17 @@ public final class BridgeService extends Service {
     static final long MAX_DURATION_MS = 5_000;
     static final int MAX_TEXT_CHARS = 2_000;
     private static final long MOVE_INTERVAL_MS = 16;
+
+    /**
+     * Never inject while one of these is in front: runtime-permission prompts and app
+     * installs. Android shields these from accessibility input; injected events would
+     * get through, and the agent must not grant itself permissions or install apps.
+     */
+    static final List<String> BLOCKED_FOREGROUND = Arrays.asList(
+        "com.android.permissioncontroller",
+        "com.google.android.permissioncontroller",
+        "com.android.packageinstaller",
+        "com.google.android.packageinstaller");
 
     /** Keys the agent may press. No POWER, no volume, no camera, no calls. */
     static final int[] ALLOWED_KEYS = {
@@ -61,25 +80,25 @@ public final class BridgeService extends Service {
         }
 
         @Override
-        public boolean tap(int x, int y, long durationMs) {
+        public int tap(int x, int y, long durationMs) {
             enforceCaller();
             return withIdentity(() -> doSwipe(x, y, x, y, durationMs));
         }
 
         @Override
-        public boolean swipe(int x1, int y1, int x2, int y2, long durationMs) {
+        public int swipe(int x1, int y1, int x2, int y2, long durationMs) {
             enforceCaller();
             return withIdentity(() -> doSwipe(x1, y1, x2, y2, durationMs));
         }
 
         @Override
-        public boolean key(int keyCode) {
+        public int key(int keyCode) {
             enforceCaller();
             return withIdentity(() -> doKey(keyCode));
         }
 
         @Override
-        public boolean text(String text) {
+        public int text(String text) {
             enforceCaller();
             return withIdentity(() -> doText(text));
         }
@@ -87,7 +106,15 @@ public final class BridgeService extends Service {
         @Override
         public boolean enableAgentAccessibility() {
             enforceCaller();
-            return withIdentity(BridgeService.this::doEnableAccessibility);
+            long id = Binder.clearCallingIdentity();
+            try {
+                return doEnableAccessibility();
+            } catch (RuntimeException e) {
+                Log.w(TAG, "enable accessibility failed", e);
+                return false;
+            } finally {
+                Binder.restoreCallingIdentity(id);
+            }
         }
     };
 
@@ -101,20 +128,29 @@ public final class BridgeService extends Service {
     private void enforceCaller() {
         // The bind-time check covers the normal path; this covers a leaked binder.
         enforceCallingPermission(PERMISSION, "MOS bridge caller lacks " + PERMISSION);
+        // The permission is per signing key; also pin the package, so another app signed
+        // with the same key can't drive the phone.
+        String[] pkgs = getPackageManager().getPackagesForUid(Binder.getCallingUid());
+        if (pkgs == null || !Arrays.asList(pkgs).contains(AGENT_PACKAGE)) {
+            throw new SecurityException("MOS bridge only serves " + AGENT_PACKAGE);
+        }
     }
 
     private interface Action {
-        boolean run();
+        int run();
     }
 
-    /** Runs as the bridge (not the caller) so the platform permissions apply. */
-    private static boolean withIdentity(Action a) {
+    /**
+     * Runs as the bridge (not the caller) so the platform permissions apply. An unexpected
+     * exception reports FAILED, not REFUSED: we can't know whether input already landed.
+     */
+    private static int withIdentity(Action a) {
         long id = Binder.clearCallingIdentity();
         try {
             return a.run();
         } catch (RuntimeException e) {
             Log.w(TAG, "action failed", e);
-            return false;
+            return IMosBridge.FAILED;
         } finally {
             Binder.restoreCallingIdentity(id);
         }
@@ -123,7 +159,24 @@ public final class BridgeService extends Service {
     /** Never drive a locked phone: the agent must not get past the lock screen. */
     private boolean locked() {
         KeyguardManager km = getSystemService(KeyguardManager.class);
-        return km == null || km.isKeyguardLocked();
+        return km == null || km.isKeyguardLocked() || km.isDeviceLocked();
+    }
+
+    /** LOCKED / BLOCKED if input must not be injected now, else OK. */
+    private int gate() {
+        if (locked()) return IMosBridge.LOCKED;
+        if (BLOCKED_FOREGROUND.contains(foregroundPackage())) return IMosBridge.BLOCKED;
+        return IMosBridge.OK;
+    }
+
+    /** Package of the top activity, via REAL_GET_TASKS. Unknown counts as blocked. */
+    private String foregroundPackage() {
+        ActivityManager am = getSystemService(ActivityManager.class);
+        List<ActivityManager.RunningTaskInfo> tasks = am.getRunningTasks(1);
+        if (tasks == null || tasks.isEmpty() || tasks.get(0).topActivity == null) {
+            return BLOCKED_FOREGROUND.get(0);
+        }
+        return tasks.get(0).topActivity.getPackageName();
     }
 
     private Point screen() {
@@ -146,26 +199,35 @@ public final class BridgeService extends Service {
 
     // ---- actions --------------------------------------------------------------
 
-    private boolean doSwipe(int x1, int y1, int x2, int y2, long durationMs) {
-        if (locked()) return false;
+    private int doSwipe(int x1, int y1, int x2, int y2, long durationMs) {
         Point s = screen();
-        if (!onScreen(x1, y1, s) || !onScreen(x2, y2, s)) return false;
-        if (durationMs < 1 || durationMs > MAX_DURATION_MS) return false;
+        if (!onScreen(x1, y1, s) || !onScreen(x2, y2, s)) return IMosBridge.REFUSED;
+        if (durationMs < 1 || durationMs > MAX_DURATION_MS) return IMosBridge.REFUSED;
+        int g = gate();
+        if (g != IMosBridge.OK) return g;
 
+        // From here on, anything short of a clean UP is FAILED: input may have landed.
         long down = SystemClock.uptimeMillis();
-        if (!injectTouch(down, down, MotionEvent.ACTION_DOWN, x1, y1)) return false;
+        if (!injectTouch(down, down, MotionEvent.ACTION_DOWN, x1, y1)) return IMosBridge.FAILED;
         long steps = Math.max(1, durationMs / MOVE_INTERVAL_MS);
+        float x = x1;
+        float y = y1;
         for (long i = 1; i <= steps; i++) {
             SystemClock.sleep(MOVE_INTERVAL_MS);
             float f = (float) i / steps;
-            float x = x1 + (x2 - x1) * f;
-            float y = y1 + (y2 - y1) * f;
+            x = x1 + (x2 - x1) * f;
+            y = y1 + (y2 - y1) * f;
             if (!injectTouch(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_MOVE, x, y)) {
                 injectTouch(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, x, y);
-                return false;
+                return IMosBridge.FAILED;
             }
         }
-        return injectTouch(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x2, y2);
+        if (locked()) { // locked mid-gesture (power button): cancel rather than release
+            injectTouch(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, x, y);
+            return IMosBridge.FAILED;
+        }
+        return injectTouch(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x2, y2)
+                ? IMosBridge.OK : IMosBridge.FAILED;
     }
 
     private boolean injectTouch(long downTime, long eventTime, int action, float x, float y) {
@@ -178,24 +240,29 @@ public final class BridgeService extends Service {
         }
     }
 
-    private boolean doKey(int keyCode) {
-        if (locked() || !allowedKey(keyCode)) return false;
+    private int doKey(int keyCode) {
+        if (!allowedKey(keyCode)) return IMosBridge.REFUSED;
+        int g = gate();
+        if (g != IMosBridge.OK) return g;
         long now = SystemClock.uptimeMillis();
         KeyEvent down = new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0, 0,
                 KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD);
         KeyEvent up = KeyEvent.changeAction(down, KeyEvent.ACTION_UP);
-        return inject(down) && inject(up);
+        if (!inject(down)) return IMosBridge.FAILED;
+        return inject(up) ? IMosBridge.OK : IMosBridge.FAILED;
     }
 
-    private boolean doText(String text) {
-        if (locked() || text == null || text.isEmpty() || text.length() > MAX_TEXT_CHARS) return false;
+    private int doText(String text) {
+        if (text == null || text.isEmpty() || text.length() > MAX_TEXT_CHARS) return IMosBridge.REFUSED;
         KeyCharacterMap map = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
         KeyEvent[] events = map.getEvents(text.toCharArray());
-        if (events == null) return false; // characters the keymap can't produce: caller falls back
+        if (events == null) return IMosBridge.REFUSED; // characters the keymap can't produce
+        int g = gate();
+        if (g != IMosBridge.OK) return g;
         for (KeyEvent e : events) {
-            if (!inject(KeyEvent.changeTimeRepeat(e, SystemClock.uptimeMillis(), 0))) return false;
+            if (!inject(KeyEvent.changeTimeRepeat(e, SystemClock.uptimeMillis(), 0))) return IMosBridge.FAILED;
         }
-        return true;
+        return IMosBridge.OK;
     }
 
     private boolean inject(InputEvent ev) {

@@ -6,5 +6,6 @@
     <privapp-permissions package="dev.mos.bridge">
         <permission name="android.permission.INJECT_EVENTS" />
         <permission name="android.permission.WRITE_SECURE_SETTINGS" />
+        <permission name="android.permission.REAL_GET_TASKS" />
     </privapp-permissions>
 </permissions>

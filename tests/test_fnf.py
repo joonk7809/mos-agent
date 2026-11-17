@@ -198,3 +198,11 @@ def test_swipe_vector_moves_finger_in_direction():
     assert x1 == x2 == 540 and y2 < y1
     x1, y1, x2, y2 = swipe_vector("left", 540, 1200, 1080, 2400)
     assert x2 < x1 and y1 == y2
+
+
+def test_safety_flags_permission_grants():
+    # MOS ROM phones inject real input, which reaches permission dialogs accessibility can't.
+    # (The bridge also refuses to touch the permission controller and package installer.)
+    for label in ["Allow", "Allow all the time", "Grant access"]:
+        els = [{"text": label, "bounds": [0, 0, 100, 100], "clickable": True}]
+        assert safety.needs_confirmation({"type": "click", "x": 50, "y": 50}, els), label

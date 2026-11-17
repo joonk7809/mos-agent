@@ -14,8 +14,9 @@ import dev.mos.bridge.IMosBridge
  *
  * On a MOS ROM phone, taps, swipes and keys go through the bridge (real injected input,
  * works where accessibility gestures are ignored). Everywhere else the bridge is absent
- * and [call] returns false, so callers fall back to accessibility. A bridge call that
- * fails or is refused also returns false, with the same fallback.
+ * and [call] returns null, so callers fall back to accessibility. A call that dies
+ * mid-way throws instead: the input may already have landed, so falling back could
+ * repeat it (see the result codes in IMosBridge.aidl).
  */
 class BridgeClient(
     private val context: Context,
@@ -61,7 +62,8 @@ class BridgeClient(
         if (bound) {
             try {
                 context.unbindService(connection)
-            } catch (_: IllegalArgumentException) {
+            } catch (e: IllegalArgumentException) {
+                Log.d(TAG, "bridge was not bound", e)
             }
         }
         bound = false
@@ -70,17 +72,19 @@ class BridgeClient(
 
     val available: Boolean get() = bridge != null
 
-    /** Runs [f] on the bridge; false when there is no bridge, it refused, or it died. */
-    fun call(f: (IMosBridge) -> Boolean): Boolean {
-        val b = bridge ?: return false
+    /**
+     * Runs [f] on the bridge. Null when there is no bridge or it rejected us as a caller
+     * (nothing was injected; use accessibility). Throws if the bridge died during the call.
+     */
+    fun <T> call(f: (IMosBridge) -> T): T? {
+        val b = bridge ?: return null
         return try {
             f(b)
-        } catch (e: RemoteException) {
-            Log.w(TAG, "bridge call failed", e)
-            false
         } catch (e: SecurityException) {
             Log.w(TAG, "bridge refused caller", e)
-            false
+            null
+        } catch (e: RemoteException) {
+            throw IllegalStateException("bridge died mid-action; not retrying", e)
         }
     }
 

@@ -12,7 +12,7 @@ import re
 RISKY_WORDS = re.compile(
     r"\b(send|pay|payment|buy|purchase|order|checkout|check out|place order|delete|remove|erase|"
     r"post|publish|share|transfer|submit|confirm|book|reserve|subscribe|call|dial|uninstall|"
-    r"reset|factory|sign out|log out|accept|agree|install)\b", re.IGNORECASE)
+    r"reset|factory|sign out|log out|accept|agree|install|allow|grant)\b", re.IGNORECASE)
 
 # A card number as people type it: 12-19 digits in one run, or 4-digit groups (Amex 4-6-5)
 # split by one consistent space/dash/dot (or a doubled one). Groups keep dates and phone numbers from matching.

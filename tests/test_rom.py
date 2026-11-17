@@ -153,3 +153,42 @@ def test_build_script_never_uses_public_test_keys() -> None:
     sh = (ROM / "build.sh").read_text()
     assert "PRODUCT_DEFAULT_DEV_CERTIFICATE := vendor/lineage-priv/keys/releasekey" in sh
     assert "pin_cert.py" in sh
+
+
+def test_bridge_module_has_the_powers_it_needs_and_lands_where_its_allowlist_does() -> None:
+    bp = (BRIDGE / "Android.bp").read_text()
+    app = bp.split("android_app {", 1)[1].split("\n}", 1)[0]
+    for prop in ['certificate: "platform"', "privileged: true", "platform_apis: true", "system_ext_specific: true"]:
+        assert prop in app, prop
+    etc = bp.split("prebuilt_etc {", 1)[1].split("\n}", 1)[0]
+    assert 'sub_dir: "permissions"' in etc and "system_ext_specific: true" in etc
+
+
+def test_bridge_refuses_permission_and_install_screens() -> None:
+    java = (BRIDGE / "src" / "dev" / "mos" / "bridge" / "BridgeService.java").read_text()
+    blocked = java.split("BLOCKED_FOREGROUND = Arrays.asList(", 1)[1].split(");", 1)[0]
+    for pkg in ["com.android.permissioncontroller", "com.google.android.permissioncontroller",
+                "com.android.packageinstaller", "com.google.android.packageinstaller"]:
+        assert f'"{pkg}"' in blocked
+    # every injecting path goes through the gate
+    for fn in ["doSwipe", "doKey", "doText"]:
+        body = java.split(f"private int {fn}(", 1)[1].split("\n    }\n", 1)[0]
+        assert "gate()" in body, fn
+
+
+def test_app_falls_back_only_when_nothing_was_injected() -> None:
+    kt = (APP / "kotlin" / "dev" / "mos" / "agent" / "MosAccessibilityService.kt").read_text()
+    when = kt.split("when (val r = bridge.call(f))", 1)[1].split("\n        }\n", 1)[0]
+    lines = [ln.strip() for ln in when.strip().strip("{").splitlines() if "->" in ln]
+    assert lines[0] == "null, IMosBridge.REFUSED -> false"
+    assert lines[1] == "IMosBridge.OK -> true"
+    assert all("throw" in ln for ln in lines[2:]) and lines[-1].startswith("else ->")
+
+
+def test_app_never_enables_accessibility_on_its_own() -> None:
+    kt = (APP / "kotlin" / "dev" / "mos" / "agent" / "MainActivity.kt").read_text()
+    calls = [m.start() for m in re.finditer(r"enableAgentAccessibility\(\)", kt)]
+    assert len(calls) == 1
+    fn = kt.rfind("private fun ", 0, calls[0])
+    assert kt[fn:].startswith("private fun turnOnAgent()")
+    assert "turnOnAgent() }" in kt  # only reached from the button's click listener

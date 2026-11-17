@@ -2,7 +2,7 @@
 
 LineageOS for a Pixel, plus two MOS pieces:
 
-- **MosBridge** (`vendor-extra/MosBridge`): a small platform-signed system app. It injects real touch and key events (`INJECT_EVENTS`) and can switch on the agent's accessibility service (`WRITE_SECURE_SETTINGS`). Only apps signed with the MOS app key may use it.
+- **MosBridge** (`vendor-extra/MosBridge`): a small platform-signed system app. It injects real touch and key events (`INJECT_EVENTS`) and, when you tap the app's button, switches on the agent's accessibility service (`WRITE_SECURE_SETTINGS`). Only `dev.mos.agent` signed with the MOS app key may use it. It refuses to inject while the phone is locked or while a permission prompt or app installer is in front, and it reports "may have partly happened" instead of letting the app retry an action another way.
 - **MosAgent** (`vendor-extra/MosAgent`): the normal MOS app from `android/`, preinstalled and signed with the MOS app key. It uses the bridge for taps, swipes, keys and text when the bridge is there, and accessibility for everything else (screenshots, UI tree) and as a fallback.
 
 Why it is built this way: [ADR 0007](../docs/decisions/0007-lineageos-rom-with-privileged-bridge.md). Which Pixel: [ADR 0008](../docs/decisions/0008-first-rom-device.md).
@@ -29,15 +29,20 @@ What the script does: installs host packages and `repo`, syncs `LINEAGE_BRANCH` 
 
 Settings are environment variables documented at the top of `build.sh` (`MOS_ROM_DIR`, `MOS_KEYS`, `LINEAGE_BRANCH`, `MOS_VARIANT`, `MOS_JOBS`).
 
-## Keys: back them up
+## Keys: back them up, then get them off the box
 
 `~/mos-keys/` holds the ROM's private signing keys (`android-certs/`) and the MOS app key (`mos-app.jks`, `mos-app.pass`). Copy the folder somewhere safe and private right after the first build.
 
 - Lose `android-certs/` and you can't update a flashed phone without wiping it.
 - Lose `mos-app.jks` and the bridge stops trusting new app builds until you rebuild the ROM.
-- Anyone holding `platform.pk8` can build apps with system powers on your phones. Never commit these files or copy them to a shared box.
+- Anyone holding `platform.pk8` can build apps with system powers on your phones, and anyone holding `mos-app.jks` + `mos-app.pass` can push an app update that drives them. Never commit these files.
+- The keys are unencrypted (Lineage's inline signing needs that). `build.sh` copies them into the source tree only for the build and removes them on exit, but they stay in `MOS_KEYS`. Prefer a box you destroy afterwards, or an encrypted volume for `MOS_KEYS` that you detach after the build.
 
-Lineage's public test keys are never used for app signing, because anyone could sign an app with them and get platform (and so bridge) powers. APEX modules are still signed with AOSP's default keys; that's a known gap to close before friends get phones.
+Lineage's public test keys are never used for APKs or the update zip, because anyone could sign an app with them and get platform (and so bridge) powers. Not yet private: APEX modules (AOSP default keys) and verified boot (the bootloader stays unlocked, so there's no relock with a MOS AVB key yet). Both are known gaps to close before friends get phones.
+
+## Before a friend gets one
+
+Default builds are `userdebug` (adb root, handy for development). Friends' phones should get `MOS_VARIANT=user` builds, and the gaps above (APEX keys, relocking) should be closed first. Swipes and the Enter key are not gated by the Allow/Deny confirmation today (same as on stock phones); slide-to-pay and enter-to-send are worth gating before then.
 
 ## Flashing (first time)
 
@@ -48,7 +53,7 @@ Follow the LineageOS install guide for your device (`https://wiki.lineageos.org/
 3. Developer options: enable OEM unlocking and USB debugging. `adb reboot bootloader`, then `fastboot flashing unlock` (this wipes the phone).
 4. `fastboot flash` the partitions the guide lists (typically `boot`, `dtbo`, `vendor_kernel_boot` and/or `vendor_boot`) from the output folder. You must use these images, not official Lineage ones: the recovery only accepts zips signed with your keys.
 5. Reboot to recovery, factory reset, then `adb sideload lineage-*.zip`.
-6. Boot, open **MOS**. On first launch the bridge switches the agent's accessibility service on by itself; the status line should say "Agent service: on". Then set the server URL and token as usual.
+6. Boot, open **MOS** and tap **Turn on the agent**: the bridge switches the agent's accessibility service on (no trip through Settings). The status line should say "Agent service: on". Then set the server URL and token as usual.
 
 Updates later: build again, then in recovery `adb sideload` the new zip (no wipe needed while the keys are the same). App-only updates: `adb install -r MosAgent.apk` from the output folder (must be signed with the MOS app key, which `build.sh` does).
 

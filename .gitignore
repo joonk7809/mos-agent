@@ -13,3 +13,5 @@ runs/
 *.keystore
 mos-keys/
 rom/vendor-extra/MosAgent/*.apk
+*.pass
+*.x509.pem

@@ -111,13 +111,16 @@ if [[ $SKIP_SYNC == 0 ]]; then
   repo sync -c -j"$MOS_JOBS" --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
 fi
 
-# envsetup.sh and breakfast reference unset variables; relax nounset around them.
+# AOSP's envsetup.sh, breakfast and m aren't written for `set -euo pipefail`: relax all
+# three around them and check their results explicitly.
 lineage_env() {
-  set +u
+  set +eu +o pipefail
   # shellcheck disable=SC1091
   source build/envsetup.sh >/dev/null
   breakfast "$DEVICE" "$MOS_VARIANT"
-  set -u
+  local rc=$?
+  set -eu -o pipefail
+  [[ $rc -eq 0 ]] || { echo "breakfast $DEVICE failed (rc=$rc)" >&2; exit 1; }
 }
 log "breakfast $DEVICE (fetches device trees on first run)"
 lineage_env
@@ -125,20 +128,23 @@ lineage_env
 # ---- 3. signing keys (generated once, reused forever) ------------------------------
 # Lineage's public test keys would let anyone sign an app as "platform" and get the
 # bridge's powers, so MOS builds always use private release keys.
+# Keys are generated once; the loop also finishes a set left half-made by an interrupted run.
 CERTS=$MOS_KEYS/android-certs
-if [[ ! -f $CERTS/platform.pk8 ]]; then
-  log "generating ROM signing keys in $CERTS (first run only)"
-  mkdir -p "$CERTS"
-  subject='/C=US/ST=CA/L=NA/O=MOS/OU=MOS/CN=MOS ROM'
-  for cert in bluetooth cyngn-app media networkstack nfc platform releasekey sdk_sandbox shared testcert testkey verity; do
-    [[ -f $CERTS/$cert.pk8 ]] && continue
-    # make_key asks for a password; an empty answer makes an unencrypted key.
-    printf '\n' | ./development/tools/make_key "$CERTS/$cert" "$subject" >/dev/null 2>&1 || true
-    [[ -f $CERTS/$cert.pk8 ]] || { echo "make_key failed for $cert" >&2; exit 1; }
-  done
-  chmod 600 "$CERTS"/*.pk8
-fi
+mkdir -p "$CERTS"
+subject='/C=US/ST=CA/L=NA/O=MOS/OU=MOS/CN=MOS ROM'
+for cert in bluetooth cyngn-app media networkstack nfc platform releasekey sdk_sandbox shared testcert testkey verity; do
+  [[ -f $CERTS/$cert.pk8 && -f $CERTS/$cert.x509.pem ]] && continue
+  log "generating ROM signing key $cert"
+  rm -f "$CERTS/$cert.pk8" "$CERTS/$cert.x509.pem" # make_key refuses to overwrite a half-made pair
+  # make_key asks for a password; an empty answer makes an unencrypted key (inline signing
+  # needs that). Its exit code is always 1, so check for the files instead.
+  printf '\n' | ./development/tools/make_key "$CERTS/$cert" "$subject" >/dev/null 2>&1 || true
+  [[ -f $CERTS/$cert.pk8 ]] || { echo "make_key failed for $cert" >&2; exit 1; }
+done
+chmod 600 "$CERTS"/*.pk8
 mkdir -p vendor/lineage-priv
+# The tree only holds the keys while this script runs.
+trap 'rm -rf "$TREE/vendor/lineage-priv/keys"' EXIT
 rsync -a --delete "$CERTS/" vendor/lineage-priv/keys/
 echo 'PRODUCT_DEFAULT_DEV_CERTIFICATE := vendor/lineage-priv/keys/releasekey' > vendor/lineage-priv/keys/keys.mk
 cat > vendor/lineage-priv/keys/BUILD.bazel <<'EOF'
@@ -202,16 +208,24 @@ cp "$APK" vendor/extra/MosAgent/MosAgent.apk
 log "building LineageOS + MOS for $DEVICE (long on first run)"
 export USE_CCACHE=1 CCACHE_EXEC=/usr/bin/ccache CCACHE_DIR=$MOS_ROM_DIR/ccache
 ccache -M 50G >/dev/null
-set +u
+touch "$MOS_ROM_DIR/.build-start"
+set +eu +o pipefail
 m -j"$MOS_JOBS" bacon
+rc=$?
 OUT_DIR=$ANDROID_PRODUCT_OUT
-set -u
+set -eu -o pipefail
+[[ $rc -eq 0 ]] || { echo "build failed (rc=$rc); see the log above" >&2; exit 1; }
 
 # ---- 7. collect -------------------------------------------------------------------------
 DEST=$MOS_ROM_DIR/out/$DEVICE-$(date -u +%Y%m%d-%H%M)
 mkdir -p "$DEST"
-zip_path=$(find "$OUT_DIR" -maxdepth 1 -name 'lineage-*.zip' -newer vendor/extra/MosAgent/MosAgent.apk | sort | tail -1)
-[[ -n "$zip_path" ]] || { echo "no fresh lineage-*.zip in $OUT_DIR" >&2; exit 1; }
+# Newest zip by mtime. bacon hard-links it to the OTA package, so an unchanged rebuild can
+# leave an older mtime: warn rather than fail.
+zip_path=$(find "$OUT_DIR" -maxdepth 1 -name 'lineage-*.zip' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+[[ -n "$zip_path" ]] || { echo "no lineage-*.zip in $OUT_DIR" >&2; exit 1; }
+if [[ ! "$zip_path" -nt "$MOS_ROM_DIR/.build-start" ]]; then
+  echo "warning: $zip_path predates this build (nothing changed?); copying it anyway" >&2
+fi
 cp "$zip_path" "$DEST/"
 for img in boot dtbo init_boot vendor_boot vendor_kernel_boot recovery; do
   [[ -f $OUT_DIR/$img.img ]] && cp "$OUT_DIR/$img.img" "$DEST/"
@@ -223,6 +237,7 @@ log "done: $DEST"
 ls -lh "$DEST"
 cat <<EOF
 
-Next: flash it (rom/README.md, "Flashing"). Back up $MOS_KEYS somewhere safe NOW:
-without those keys you can't ship updates to a phone running this build without wiping it.
+Next: flash it (rom/README.md, "Flashing"). Back up $MOS_KEYS somewhere safe and private
+NOW, then delete it from this box (or destroy the box): without those keys you can't update
+a flashed phone without wiping it, and anyone with them can sign system apps for your phones.
 EOF
