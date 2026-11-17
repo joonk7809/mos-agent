@@ -1,4 +1,4 @@
-# 0008. First MOS ROM device: Pixel 8a (akita)
+# 0009. First MOS ROM device: Pixel 8a (akita)
 
 - Status: Proposed
 - Date: 2026-11-17

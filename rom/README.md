@@ -5,7 +5,7 @@ LineageOS for a Pixel, plus two MOS pieces:
 - **MosBridge** (`vendor-extra/MosBridge`): a small platform-signed system app. It injects real touch and key events (`INJECT_EVENTS`) and, when you tap the app's button, switches on the agent's accessibility service (`WRITE_SECURE_SETTINGS`). Only `dev.mos.agent` signed with the MOS app key may use it. It refuses to inject while the phone is locked or while a permission prompt or app installer is in front, and it reports "may have partly happened" instead of letting the app retry an action another way.
 - **MosAgent** (`vendor-extra/MosAgent`): the normal MOS app from `android/`, preinstalled and signed with the MOS app key. It uses the bridge for taps, swipes, keys and text when the bridge is there, and accessibility for everything else (screenshots, UI tree) and as a fallback.
 
-Why it is built this way: [ADR 0007](../docs/decisions/0007-lineageos-rom-with-privileged-bridge.md). Which Pixel: [ADR 0008](../docs/decisions/0008-first-rom-device.md).
+Why it is built this way: [ADR 0008](../docs/decisions/0008-lineageos-rom-with-privileged-bridge.md). Which Pixel: [ADR 0009](../docs/decisions/0009-first-rom-device.md).
 
 What you give up on this phone: Play Integrity fails, so banking, wallet/tap-to-pay and some streaming apps won't work. Google apps aren't included (LineageOS ships without them).
 
@@ -42,7 +42,7 @@ Lineage's public test keys are never used for APKs or the update zip, because an
 
 ## Before a friend gets one
 
-Default builds are `userdebug` (adb root, handy for development). Friends' phones should get `MOS_VARIANT=user` builds, and the gaps above (APEX keys, relocking) should be closed first. Swipes and the Enter key are not gated by the Allow/Deny confirmation today (same as on stock phones); slide-to-pay and enter-to-send are worth gating before then.
+Default builds are `userdebug` (adb root, handy for development). Friends' phones should get `MOS_VARIANT=user` builds, and the gaps above (APEX keys, relocking) should be closed first. Drags from risky controls and Enter in text fields are gated now; plain swipes are not.
 
 ## Flashing (first time)
 

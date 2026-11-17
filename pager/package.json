@@ -1,0 +1,19 @@
+{
+  "name": "mos-pager",
+  "productName": "MOS Pager",
+  "version": "0.1.0",
+  "description": "A small floating desktop pet that lights up when an agent needs you.",
+  "main": "src/main.js",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "package:mac": "electron-packager . \"MOS Pager\" --platform=darwin --arch=$(uname -m | sed 's/x86_64/x64/') --out dist --overwrite --app-bundle-id=dev.mos.pager --extend-info=build/Info.plist --ignore='^/(dist|test|bin|build)($|/)'",
+    "package": "electron-packager . \"MOS Pager\" --out dist --overwrite --ignore='^/(dist|test|bin|build)($|/)'"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "44.10.1"
+  }
+}

@@ -1,4 +1,4 @@
-# 0007. Build a LineageOS-based MOS ROM with a small privileged input bridge
+# 0008. Build a LineageOS-based MOS ROM with a small privileged input bridge
 
 - Status: Accepted
 - Date: 2026-11-17

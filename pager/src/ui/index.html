@@ -1,0 +1,41 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+  <title>MOS Pager</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <section id="panel" aria-label="Pages">
+    <header>
+      <div class="title"><span id="count">0</span> waiting</div>
+      <div class="actions">
+        <button id="dnd" title="Do not disturb">🔕</button>
+        <button id="refresh" title="Check now">↻</button>
+        <button id="hide" title="Hide pet (bring back from the menu bar or the shortcut)">–</button>
+        <button id="close" title="Collapse">×</button>
+      </div>
+    </header>
+    <div id="setup" hidden>
+      <p>Connect GitHub so the pager can see pages from your agents.</p>
+      <p>Easiest: run <code>gh auth login</code> in a terminal, then press ↻.</p>
+      <p>Or paste a token (classic with <code>repo</code> scope, or fine-grained with Issues read/write on your repos). It's stored in your OS keychain.</p>
+      <div class="row"><input id="token" type="password" placeholder="ghp_… or github_pat_…" autocomplete="off"><button id="saveToken">Save</button></div>
+      <p><button id="forgetToken" class="link" hidden>Forget the saved token</button></p>
+    </div>
+    <div id="errors"></div>
+    <ol id="list"></ol>
+    <div id="empty" hidden>Nothing needs you. Agents are on it.</div>
+    <footer id="status"></footer>
+  </section>
+  <div id="pet" role="button" aria-label="MOS Pager" tabindex="0">
+    <div class="body">
+      <div class="eyes"><i></i><i></i></div>
+      <div class="mouth"></div>
+    </div>
+    <div class="badge" hidden></div>
+  </div>
+  <script src="ui.js"></script>
+</body>
+</html>

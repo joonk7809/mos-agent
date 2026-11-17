@@ -1,5 +1,5 @@
 // MOS bridge: a tiny platform-signed system app that injects input for the MOS agent app.
-// See docs/decisions/0007-lineageos-rom-with-privileged-bridge.md for why it is separate
+// See docs/decisions/0008-lineageos-rom-with-privileged-bridge.md for why it is separate
 // from the agent app.
 
 android_app {
