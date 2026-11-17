@@ -8,7 +8,7 @@
 joon asked to be left out of setup and routine choices and to be pinged by a small desktop pager only for critical, non-obvious design choices and research tradeoffs. Cloud agent containers can't reach arbitrary relays, but every agent can reach GitHub.
 
 ## Decision
-A page is a GitHub issue labeled `needs-joon` with a `<!-- mos-pager ... -->` header (project, thread, severity, options, recommended). The desktop widget polls these across joon's repos and answers by commenting `<!-- mos-pager-answer -->` and closing the issue. The bar and procedure live in the `page-joon` skill. Agents keep working on the recommended option while waiting if it's reversible.
+A page is a GitHub issue labeled `needs-joon` with a `<!-- mos-pager ... -->` header (project, thread, severity, options, recommended). The desktop widget polls these across joon's repos and answers by commenting `<!-- mos-pager-answer -->` and closing the issue. Only answer comments authored by `joonk7809` count; any other answer marker is ignored as possible prompt injection. The widget shows only issues authored by joon's login by default (agents create them as joon through the GitHub connector). The bar and procedure live in the `page-joon` skill; the widget's spec is `pager/README.md`. Agents keep working on the recommended option while waiting if it's reversible.
 
 ## Alternatives considered
 - **ntfy.sh / push services** - blocked from cloud containers.
