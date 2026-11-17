@@ -26,6 +26,11 @@ from .maiui import ParseError, Step, _image, _point
 
 NAME = "guiowl"
 HISTORY_N = 5
+# The official runner sends no sampling params, so vLLM uses the model's generation_config.json.
+SAMPLING: dict = {}
+# In GUI-Owl's action space `answer` ends the task; the official agent turns the step after an
+# answer into terminate(success). The server does the same without calling the model again.
+ANSWER_ENDS = True
 
 SYSTEM_PROMPT = '''# Tools
 
@@ -134,9 +139,10 @@ def to_native(args: dict) -> dict:
 
 def parse_response(text: str) -> tuple[str, dict]:
     """Return (action_description, canonical args)."""
-    m = re.search(r"<tool_call>(.*?)(?:</tool_call>|$)", text, re.DOTALL)
-    if not m:
+    matches = list(re.finditer(r"<tool_call>(.*?)(?:</tool_call>|$)", text, re.DOTALL))
+    if not matches:
         raise ParseError("no <tool_call> block in response")
+    m = matches[-1]  # the official agent uses the last tool call
     before = text[:m.start()]
     desc = before.split("Action:", 1)[-1].strip() if "Action:" in before else before.strip()
     try:
@@ -164,7 +170,7 @@ def build_messages(system: str, task: str, steps: list[Step], current_png: bytes
     """System, then the oldest kept screenshot with the instruction and a text list of older
     actions, then (reply, screenshot) pairs up to the current screen. Keeps history_n screenshots."""
     first = max(0, len(steps) + 1 - history_n)  # index of the oldest step whose screenshot is kept
-    older = [s.thinking or json.dumps(to_native(s.args), ensure_ascii=False) for s in steps[:first]]
+    older = [s.thinking for s in steps[:first]]  # the "Action:" text, "" if the model gave none (as official)
     pngs = [s.png for s in steps[first:]] + [current_png]
     msgs: list[dict] = [{"role": "system", "content": [{"type": "text", "text": system}]}]
     head = _image(pngs[0])

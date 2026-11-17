@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 
 NAME = "maiui"
 HISTORY_N = 3
+SAMPLING = {"max_tokens": 2048, "temperature": 0.0, "top_p": 1.0}  # the official agent's settings
+ANSWER_ENDS = False  # MAI-UI ends with terminate; answer is an intermediate report
 SCALE = 999
 RETRY_TEMPERATURE = 0.7
 

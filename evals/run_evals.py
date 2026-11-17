@@ -116,7 +116,9 @@ def main() -> None:
     out_dir = Path("runs") / "evals" / time.strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"git": git_sha(), "server": a.server, "modes": a.modes, "repeats": a.repeats,
-            "snapshot": a.snapshot, "label": a.label, "tasks": [t["id"] for t in tasks]}
+            "snapshot": a.snapshot, "label": a.label, "tasks": [t["id"] for t in tasks],
+            # since this PR the emulator client sends phone-like images; older baselines used full PNGs
+            "screenshots": "jpeg90, long edge <= 1600 (like the phone app)" if a.server else "full png"}
     if a.server:
         try:
             import urllib.request

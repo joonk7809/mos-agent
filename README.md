@@ -121,7 +121,7 @@ step's `args` in `steps.jsonl` (or redo the task and keep the good run), mark th
 session successful in `final.json`, then:
 
 ```bash
-python -m mos.export_sft runs/server --out data/sft.jsonl
+python -m mos.export_sft runs/server --out data/sft.jsonl --policy maiui   # one model format per file
 ```
 
 That writes MAI-UI-format samples (`{"messages", "images"}`, the ms-swift /

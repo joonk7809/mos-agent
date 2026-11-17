@@ -15,6 +15,8 @@ export MOS_POLICY="${MOS_POLICY:-maiui}"
 if [[ "$MOS_POLICY" == "guiowl" ]]; then
   MODEL="${MOS_MODEL:-mPLUG/GUI-Owl-1.5-8B-Instruct}"; SERVED=GUI-Owl-1.5-8B-Instruct
   MAX_LEN="${MOS_MAX_LEN:-24576}"; IMAGES=5   # GUI-Owl keeps the last 5 screenshots
+  # Phones and mos.remote send 720x1600 screenshots, ~1.1k tokens each, so 5 fit easily.
+  # Unverified on a 24 GB card: if vLLM says the KV cache doesn't fit, lower MOS_MAX_LEN.
 else
   MODEL="${MOS_MODEL:-Tongyi-MAI/MAI-UI-8B}"; SERVED=MAI-UI-8B
   MAX_LEN="${MOS_MAX_LEN:-16384}"; IMAGES=3
@@ -45,6 +47,7 @@ if ! curl -sf localhost:8000/v1/models >/dev/null; then
   nohup python3 -m vllm.entrypoints.openai.api_server --model "$MODEL" \
     --served-model-name "$SERVED" --host 127.0.0.1 --port 8000 \
     --max-model-len "$MAX_LEN" --limit-mm-per-prompt "{\"image\": $IMAGES}" \
+    --max-num-seqs 4 \
     --gpu-memory-utilization 0.90 --trust-remote-code \
     > "$MOS_DATA/logs/vllm.log" 2>&1 &
   echo "Loading the model (first run downloads ~17 GB)..."

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 from pathlib import Path
 
 from . import maiui, policies
@@ -82,13 +83,18 @@ def main() -> None:
     p.add_argument("runs", type=Path)
     p.add_argument("--out", type=Path, default=Path("data/sft.jsonl"))
     p.add_argument("--include-failed", action="store_true")
+    p.add_argument("--policy", default=os.environ.get("MOS_POLICY", "maiui"),
+                   help="only export sessions run with this policy (each model needs its own format)")
     a = p.parse_args()
+    want = policies.get(a.policy).NAME
     a.out.parent.mkdir(parents=True, exist_ok=True)
     n_sessions = n_samples = 0
     with a.out.open("w") as f:
         for d in sorted(x for x in a.runs.iterdir() if x.is_dir()):
             loaded = load_session(d)
             if not loaded or (loaded[0]["status"] != "success" and not a.include_failed):
+                continue
+            if policies.get(loaded[0].get("policy")).NAME != want:
                 continue
             for sample in session_samples(d):
                 f.write(json.dumps(sample, ensure_ascii=False) + "\n")

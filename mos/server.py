@@ -133,7 +133,7 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
     llm = llm or maiui.ChatClient(
         base_url=os.environ.get("MOS_LLM_URL", "http://localhost:8000/v1"),
         model=os.environ.get("MOS_LLM_MODEL", "MAI-UI-8B" if pol is maiui else "GUI-Owl-1.5-8B-Instruct"),
-        api_key=os.environ.get("MOS_LLM_KEY", "EMPTY"))
+        api_key=os.environ.get("MOS_LLM_KEY", "EMPTY"), params=dict(pol.SAMPLING))
     run_root = run_root or Path(os.environ.get("MOS_RUNS", "runs/server"))
     token = token if token is not None else os.environ.get("MOS_TOKEN", "")
     if not token:
@@ -187,8 +187,12 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
             finish(s, "max_steps")
             return StepResponse(done=True, status="max_steps", step=len(s.steps))
 
-        png = _normalize_png(req.screenshot_b64)
         n = len(s.steps)
+        if pol.ANSWER_ENDS and s.steps and s.steps[-1].args.get("action") == "answer":
+            log(s, {"step": n, "event": "answer_ends_task"})
+            finish(s, "success")
+            return StepResponse(done=True, status="success", step=n)
+        png = _normalize_png(req.screenshot_b64)
         seen = s.guard.observe(png)
         if seen["stuck"]:
             log(s, {"step": n, "event": "stuck", "reason": seen["stuck"]})

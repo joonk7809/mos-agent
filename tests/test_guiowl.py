@@ -167,3 +167,57 @@ def test_unknown_policy_is_rejected():
     assert policies.get(None) is maiui and policies.get("GUI_Owl") is guiowl
     with pytest.raises(ValueError):
         policies.get("gpt")
+
+
+def _client(tmp_path, llm, policy="guiowl"):
+    c = TestClient(create_app(llm=llm, run_root=tmp_path, token="tok", policy=policy))
+    c.headers["Authorization"] = "Bearer tok"
+    sid = c.post("/v1/sessions", json={"task": "t", "apps": APPS, "screen": {"width": 1080, "height": 2400}}).json()["session_id"]
+    return c, sid
+
+
+def test_answer_ends_a_guiowl_task_like_the_official_agent(tmp_path):
+    llm = ScriptedLLM([owl({"action": "answer", "text": "It is 21C"}, "Report the weather")])
+    c, sid = _client(tmp_path, llm)
+    r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
+    assert r["action"] == {"type": "answer", "text": "It is 21C"} and not r["done"]  # the phone shows it
+    r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
+    assert r["done"] and r["status"] == "success" and len(llm.calls) == 1
+
+
+def test_maiui_answer_does_not_end_the_task(tmp_path):
+    from tests.test_fnf import resp
+    llm = ScriptedLLM([resp({"action": "answer", "text": "x"}), resp({"action": "terminate", "status": "success"})])
+    c, sid = _client(tmp_path, llm, policy="maiui")
+    for _ in range(2):
+        r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
+    assert r["status"] == "success" and len(llm.calls) == 2
+
+
+def test_sampling_params_follow_the_policy(monkeypatch, tmp_path):
+    from mos import server as srv
+    made = []
+    monkeypatch.setattr(srv.maiui, "ChatClient", lambda **kw: made.append(kw) or ScriptedLLM([]))
+    create_app(run_root=tmp_path, token="t", policy="guiowl")
+    create_app(run_root=tmp_path, token="t", policy="maiui")
+    assert made[0]["params"] == {} and made[1]["params"]["temperature"] == 0.0
+
+
+def test_export_keeps_each_policys_sessions_apart(tmp_path, monkeypatch):
+    import sys
+    from mos import export_sft
+    from tests.test_fnf import resp
+    for pol, reply in (("guiowl", owl({"action": "terminate", "status": "success"})),
+                       ("maiui", resp({"action": "terminate", "status": "success"}))):
+        c, sid = _client(tmp_path, ScriptedLLM([reply]), policy=pol)
+        c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG})
+    out = tmp_path / "sft.jsonl"
+    monkeypatch.setattr(sys, "argv", ["x", str(tmp_path), "--out", str(out), "--policy", "guiowl"])
+    export_sft.main()
+    rows = [json.loads(l) for l in out.read_text().splitlines()]
+    assert len(rows) == 1 and rows[0]["messages"][-1]["content"].startswith("Action:")
+
+
+def test_last_tool_call_wins():
+    raw = owl({"action": "wait"}) + "\n<tool_call>\n" + json.dumps({"name": "mobile_use", "arguments": {"action": "open", "text": "Clock"}}) + "\n</tool_call>"
+    assert guiowl.parse_response(raw)[1] == {"action": "open", "text": "Clock"}
