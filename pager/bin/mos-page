@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+"""Page joon (or whoever runs MOS Pager) from a shell. Stdlib only.
+
+  mos-page "Pick the fine-tune base" --severity decision \
+      --option "MAI-UI-8B" --option "UI-TARS-7B" --recommended 1 \
+      --thread https://claude.ai/code/project/... --body-file notes.md
+
+Transport, in order:
+  github  open an issue labeled needs-joon (repo from --repo, MOS_PAGER_REPO,
+          or this checkout's origin). Token: GH_TOKEN / GITHUB_TOKEN / `gh auth token`.
+  ntfy    if MOS_PAGER_NTFY_TOPIC is set (MOS_PAGER_NTFY_SERVER, default https://ntfy.sh).
+
+  mos-page --check owner/repo#12    print the answer if there is one (exit 1 if not)
+  mos-page ... --wait 600           block up to 600 s for an answer, print it
+"""
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+LABEL = os.environ.get("MOS_PAGER_LABEL", "needs-joon")
+ANSWER_MARK = "<!-- mos-pager-answer -->"
+SEVERITIES = ("decision", "blocker", "fyi")
+
+
+def format_page(project="", thread="", severity="decision", options=(), recommended=0, body=""):
+    def clean(s):
+        return re.sub(r"[\r\n]+", " ", str(s).replace("-->", "- ->")).strip()
+
+    lines = ["<!-- mos-pager"]
+    if project:
+        lines.append(f"project: {clean(project)}")
+    if thread:
+        lines.append(f"thread: {clean(thread)}")
+    lines.append(f"severity: {severity}")
+    if options:
+        lines.append("options: " + " | ".join(clean(o).replace("|", "/") for o in options))
+    if recommended:
+        lines.append(f"recommended: {recommended}")
+    lines.append("-->")
+    return "\n".join(lines) + "\n" + (body or "").strip() + "\n"
+
+
+def gh_token():
+    for k in ("MOS_PAGER_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+        if os.environ.get(k):
+            return os.environ[k]
+    try:
+        return subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def origin_repo():
+    try:
+        url = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    m = re.search(r"github\.com[:/]([^/\s]+/[^/\s]+?)(?:\.git)?\s*$", url)
+    return m.group(1) if m else ""
+
+
+def http(method, url, token="", data=None, headers=None):
+    h = {"User-Agent": "mos-page/0.1", **(headers or {})}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    body = None
+    if data is not None:
+        if isinstance(data, (dict, list)):
+            body = json.dumps(data).encode()
+            h["Content-Type"] = "application/json"
+        else:
+            body = str(data).encode()
+    req = urllib.request.Request(url, data=body, method=method, headers=h)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read().decode()
+        return json.loads(raw) if raw.strip().startswith(("{", "[")) else raw
+
+
+def gh(method, path, token, data=None):
+    return http(method, "https://api.github.com" + path, token, data,
+                {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
+
+
+def answer_authors(token):
+    """Only these GitHub logins can answer a page. Anyone else's comment, even with the
+    answer marker, is ignored, so a stranger can't inject an 'answer'."""
+    env = os.environ.get("MOS_PAGER_ANSWER_FROM", "")
+    if env:
+        return {a.strip().lower() for a in env.split(",") if a.strip()}
+    return {gh("GET", "/user", token)["login"].lower()}
+
+
+def github_answer(repo, number, token, authors=None):
+    authors = authors or answer_authors(token)
+    comments = gh("GET", f"/repos/{repo}/issues/{number}/comments?per_page=100", token)
+    for c in reversed(comments):
+        login = ((c.get("user") or {}).get("login") or "").lower()
+        if login in authors and ANSWER_MARK in (c.get("body") or ""):
+            m = re.search(r"\*\*Answer:\*\*\s*(.*?)(?:\n\n_Sent from MOS Pager\._)?\s*$", c["body"], re.S)
+            return m.group(1).strip() if m else c["body"]
+    issue = gh("GET", f"/repos/{repo}/issues/{number}", token)
+    if issue.get("state") == "closed":
+        return "(dismissed without an answer)"
+    return None
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("title", nargs="?", help="the question, short")
+    ap.add_argument("--body", default="")
+    ap.add_argument("--body-file", help="markdown context; - for stdin")
+    ap.add_argument("--project", default=os.environ.get("MOS_PAGER_PROJECT", ""))
+    ap.add_argument("--thread", default=os.environ.get("MOS_PAGER_THREAD", ""), help="link back to the agent's thread")
+    ap.add_argument("--severity", choices=SEVERITIES, default="decision")
+    ap.add_argument("--option", action="append", default=[], help="a choice; repeat for each")
+    ap.add_argument("--recommended", type=int, default=0, help="1-based index of the recommended option")
+    ap.add_argument("--repo", default=os.environ.get("MOS_PAGER_REPO", ""))
+    ap.add_argument("--via", choices=("auto", "github", "ntfy"), default="auto")
+    ap.add_argument("--wait", type=int, default=0, help="seconds to wait for an answer")
+    ap.add_argument("--check", help="owner/repo#N: print its answer if any")
+    ap.add_argument("--dry-run", action="store_true", help="print the page body, send nothing")
+    a = ap.parse_args(argv)
+
+    token = ""
+    if a.check:
+        m = re.fullmatch(r"([^/\s]+/[^#\s]+)#(\d+)", a.check)
+        if not m:
+            ap.error("--check wants owner/repo#N")
+        ans = github_answer(m.group(1), m.group(2), gh_token())
+        if ans is None:
+            return 1
+        print(ans)
+        return 0
+
+    if not a.title:
+        ap.error("a title is required")
+    if len(a.option) > 6:
+        ap.error("at most 6 --option values (the pager shows 6)")
+    if a.recommended and not 1 <= a.recommended <= len(a.option):
+        ap.error("--recommended must point at one of the --option values")
+    body = a.body
+    if a.body_file:
+        body = sys.stdin.read() if a.body_file == "-" else open(a.body_file, encoding="utf-8").read()
+    text = format_page(a.project, a.thread, a.severity, a.option, a.recommended, body)
+    if a.dry_run:
+        print(f"# {a.title}\n{text}")
+        return 0
+
+    topic = os.environ.get("MOS_PAGER_NTFY_TOPIC", "")
+    via = a.via
+    if via == "auto":
+        token = gh_token()
+        repo = a.repo or origin_repo()
+        via = "github" if token and repo else ("ntfy" if topic else "")
+    if via == "github":
+        token = token or gh_token()
+        repo = a.repo or origin_repo()
+        if not (token and repo):
+            ap.error("github needs a token (GH_TOKEN or `gh auth login`) and --repo")
+        issue = gh("POST", f"/repos/{repo}/issues", token, {"title": a.title, "body": text, "labels": [LABEL]})
+        ref = f"{repo}#{issue['number']}"
+        print(f"paged: {ref} {issue['html_url']}")
+        deadline = time.time() + a.wait
+        authors = answer_authors(token) if a.wait else None
+        while a.wait and time.time() < deadline:
+            time.sleep(min(20, max(1, deadline - time.time())))
+            try:
+                ans = github_answer(repo, issue["number"], token, authors)
+            except (urllib.error.URLError, OSError, ValueError) as e:  # network blip: keep waiting
+                print(f"mos-page: retrying ({e})", file=sys.stderr)
+                continue
+            if ans is not None:
+                print(f"answer: {ans}")
+                return 0
+        return 0 if not a.wait else 2
+    if via == "ntfy":
+        if not topic:
+            ap.error("set MOS_PAGER_NTFY_TOPIC")
+        server = os.environ.get("MOS_PAGER_NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+        ntoken = os.environ.get("MOS_PAGER_NTFY_TOKEN", "")
+        prio = {"blocker": 5, "decision": 4, "fyi": 2}[a.severity]
+        # ntfy.sh turns messages over 4 KB into attachments, which would lose the header.
+        if len(text.encode()) > 3800:
+            text = text.encode()[:3800].decode(errors="ignore") + "\n…(truncated)"
+        payload = {"topic": topic, "title": a.title, "message": text, "priority": prio}
+        if a.thread:
+            payload["click"] = a.thread
+        msg = http("POST", server, ntoken, payload)
+        print(f"paged via ntfy: {msg.get('id') if isinstance(msg, dict) else msg}")
+        if a.wait:
+            mid = msg.get("id") if isinstance(msg, dict) else ""
+            deadline = time.time() + a.wait
+            while time.time() < deadline:
+                time.sleep(10)
+                try:
+                    raw = http("GET", f"{server}/{topic}-answers/json?poll=1&since=1h", ntoken)
+                except (urllib.error.URLError, OSError) as e:
+                    print(f"mos-page: retrying ({e})", file=sys.stderr)
+                    continue
+                for line in str(raw).splitlines():
+                    try:
+                        ev = json.loads(line)
+                    except ValueError:
+                        continue
+                    if ev.get("title") == f"answer:{mid}":
+                        print(f"answer: {ev.get('message', '')}")
+                        return 0
+            return 2
+        return 0
+    ap.error("no transport: log in with `gh auth login` (and pass --repo outside a checkout) or set MOS_PAGER_NTFY_TOPIC")
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except urllib.error.HTTPError as e:
+        sys.exit(f"mos-page: HTTP {e.code}: {e.read().decode()[:300]}")
+    except urllib.error.URLError as e:
+        sys.exit(f"mos-page: network error: {e.reason}")

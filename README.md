@@ -22,6 +22,7 @@ deleting, and the overlay has a Stop button.
 | `mos/remote.py` | your laptop | Same protocol as the app, but over ADB. Use it to test on the emulator |
 | `mos/export_sft.py` | GPU server | Turns successful runs into fine-tuning data (Tier 1) |
 | `mos/agent.py` | anywhere | The original Claude-driven agent, kept as a baseline |
+| `pager/` | your laptop | MOS Pager: a floating desktop pet that lights up when an agent needs a decision from you |
 
 ## 1. Model server (rented GPU)
 
