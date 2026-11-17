@@ -29,7 +29,12 @@ python3 -c "import vllm" 2>/dev/null || pip install -q "vllm==0.11.0" "transform
 python3 -c "import fastapi, uvicorn" 2>/dev/null || pip install -q -r requirements.txt
 
 # 2. Token phones use; created once and kept
-if [[ ! -f "$MOS_DATA/token" ]]; then openssl rand -hex 16 > "$MOS_DATA/token"; fi
+if [[ ! -f "$MOS_DATA/token" ]]; then (umask 077; openssl rand -hex 16 > "$MOS_DATA/token"); fi
+chmod 600 "$MOS_DATA/token"
+# vLLM gets its own key: in userspace mode Tailscale forwards every tailnet port to localhost,
+# so without it any tailnet peer could use the GPU directly on :8000, skipping MOS's token.
+if [[ ! -f "$MOS_DATA/vllm_key" ]]; then (umask 077; openssl rand -hex 16 > "$MOS_DATA/vllm_key"); fi
+VLLM_KEY="$(cat "$MOS_DATA/vllm_key")"
 export MOS_TOKEN="$(cat "$MOS_DATA/token")"
 
 # 3. Tailscale, so phones reach this box without opening a public port.
@@ -45,19 +50,24 @@ fi
 # 4. The model
 if ! curl -sf localhost:8000/v1/models >/dev/null; then
   nohup python3 -m vllm.entrypoints.openai.api_server --model "$MODEL" \
-    --served-model-name "$SERVED" --host 127.0.0.1 --port 8000 \
+    --served-model-name "$SERVED" --host 127.0.0.1 --port 8000 --api-key "$VLLM_KEY" \
     --max-model-len "$MAX_LEN" --limit-mm-per-prompt "{\"image\": $IMAGES}" \
     --max-num-seqs 4 \
     --gpu-memory-utilization 0.90 --trust-remote-code \
     > "$MOS_DATA/logs/vllm.log" 2>&1 &
   echo "Loading the model (first run downloads ~17 GB)..."
-  until curl -sf localhost:8000/v1/models >/dev/null; do sleep 5; done
+  until curl -sf -H "Authorization: Bearer $VLLM_KEY" localhost:8000/v1/models >/dev/null; do sleep 5; done
 fi
 
-# 5. The MOS server
+# 5. The MOS server. It listens on localhost only, so it is never reachable from the public
+#    internet. Userspace Tailscale delivers tailnet connections to localhost ports, which is how
+#    phones reach it at http://mos-gpu:8080.
+if ! tailscale status >/dev/null 2>&1; then
+  echo "WARNING: Tailscale isn't up, so phones can't reach this server (it only listens on localhost)."
+fi
 echo
 echo "Phones: server http://$(tailscale ip -4 2>/dev/null | head -1 || echo '<this-host>'):8080"
-echo "        token  $MOS_TOKEN"
+echo "        token  in $MOS_DATA/token  (run: cat $MOS_DATA/token)"
 echo
-MOS_LLM_URL=http://127.0.0.1:8000/v1 MOS_LLM_MODEL="$SERVED" MOS_RUNS="$MOS_DATA/runs" \
-  exec python3 -m uvicorn mos.server:app --host 0.0.0.0 --port 8080
+MOS_LLM_URL=http://127.0.0.1:8000/v1 MOS_LLM_MODEL="$SERVED" MOS_LLM_KEY="$VLLM_KEY" MOS_RUNS="$MOS_DATA/runs" \
+  exec python3 -m uvicorn mos.server:app --host 127.0.0.1 --port 8080

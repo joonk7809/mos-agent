@@ -41,9 +41,11 @@ TS_AUTHKEY=tskey-auth-... MOS_DATA=/workspace/mos ./scripts/start_gpu_server.sh
 
 [`scripts/start_gpu_server.sh`](scripts/start_gpu_server.sh) installs vLLM (pinned to
 0.11.0 per MAI-UI's instructions), joins your tailnet, starts MAI-UI-8B and then the
-MOS server, and prints the URL and token for phones. Model weights, run logs and the
+MOS server (both on localhost only; userspace Tailscale forwards tailnet connections to them, and
+vLLM has its own key), and prints the URL and where the token is. Model weights, run logs and the
 token live in `MOS_DATA`, so a restarted instance comes back without re-downloading.
-Get the auth key from the Tailscale admin console (Settings → Keys), and share the
+Older versions of the script printed the phone token to the console; if you ran one, rotate it
+once with `rm $MOS_DATA/token` and give phones the new one. Get the auth key from the Tailscale admin console (Settings → Keys), and share the
 `mos-gpu` machine with friends there. Don't expose port 8080 publicly.
 
 The same thing by hand:
@@ -54,7 +56,7 @@ python -m vllm.entrypoints.openai.api_server --model Tongyi-MAI/MAI-UI-8B \
   --served-model-name MAI-UI-8B --host 127.0.0.1 --port 8000 \
   --max-model-len 16384 --gpu-memory-utilization 0.90 --trust-remote-code &
 export MOS_TOKEN=$(openssl rand -hex 16)     # give this to each phone
-MOS_LLM_URL=http://127.0.0.1:8000/v1 uvicorn mos.server:app --host 0.0.0.0 --port 8080
+MOS_LLM_URL=http://127.0.0.1:8000/v1 uvicorn mos.server:app --host 127.0.0.1 --port 8080
 ```
 
 Settings (env vars): `MOS_TOKEN` (required), `MOS_POLICY` (`maiui` default, or `guiowl`),
