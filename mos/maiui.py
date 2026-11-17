@@ -65,10 +65,11 @@ class ParseError(ValueError):
 
 
 # Arguments each action must carry; anything else is a malformed answer worth retrying.
+# swipe, system_button and terminate fall back to up / back / fail in the server.
 REQUIRED = {
     "click": ("coordinate",), "long_press": ("coordinate",), "type": ("text",),
-    "swipe": ("direction",), "open": ("text",), "drag": ("start_coordinate", "end_coordinate"),
-    "system_button": ("button",), "wait": (), "terminate": (), "answer": ("text",),
+    "swipe": (), "open": ("text",), "drag": ("start_coordinate", "end_coordinate"),
+    "system_button": (), "wait": (), "terminate": (), "answer": ("text",),
     "ask_user": ("text",),
 }
 

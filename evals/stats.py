@@ -32,19 +32,26 @@ def summarize(rows: list[dict]) -> dict:
     by_task: dict[str, list[bool]] = defaultdict(list)
     for r in valid:
         by_task[r["task"]].append(bool(r["success"]))
+    # pass@k / pass^k only over tasks with all k repeats valid, so one lucky valid run
+    # can't stand in for k, and a task whose runs were all invalid still shows up as missing.
+    tasks = {r["task"] for r in rows}
+    k = max((len(v) for v in by_task.values()), default=0)
+    full = {t: v for t, v in by_task.items() if len(v) == k}
     claimed = [r for r in valid if r.get("self_report")]
     false_success = sum(1 for r in claimed if not r["success"])
-    mean = lambda k: round(sum(r.get(k) or 0 for r in valid) / n, 2) if n else 0.0
+    mean = lambda key: round(sum(r.get(key) or 0 for r in valid) / n, 2) if n else 0.0
     lo, hi = wilson(wins, n)
     return {
         "runs": n,
         "invalid_runs": len(rows) - n,
         "success_rate": round(wins / n, 3) if n else 0.0,
         "ci95": [round(lo, 3), round(hi, 3)],
-        "pass_at_k": round(sum(any(v) for v in by_task.values()) / len(by_task), 3) if by_task else 0.0,
-        "pass_hat_k": round(sum(all(v) for v in by_task.values()) / len(by_task), 3) if by_task else 0.0,
+        "pass_at_k": round(sum(any(v) for v in full.values()) / len(full), 3) if full else 0.0,
+        "pass_hat_k": round(sum(all(v) for v in full.values()) / len(full), 3) if full else 0.0,
+        "k": k,
+        "tasks_with_k_valid_runs": f"{len(full)}/{len(tasks)}",
         "false_success_rate": round(false_success / len(claimed), 3) if claimed else 0.0,
         "avg_steps": mean("steps"),
         "avg_seconds": mean("seconds"),
-        "per_task": {t: f"{sum(v)}/{len(v)}" for t, v in sorted(by_task.items())},
+        "per_task": {t: f"{sum(by_task.get(t, []))}/{len(by_task.get(t, []))}" for t in sorted(tasks)},
     }

@@ -37,15 +37,37 @@ CLICK = {"action": "click", "coordinate": [500, 500]}
 def test_same_screen_ignores_tiny_changes_but_not_new_content():
     sa = loopguard.signature(A)
     assert loopguard.same_screen(sa, loopguard.signature(png_with("12:01", xy=(40, 20))))  # status bar clock
-    assert loopguard.same_screen(sa, loopguard.signature(_jpeg(A)))                     # compression noise
+    assert loopguard.same_screen(loopguard.signature(_jpeg(A, 60)), loopguard.signature(_jpeg(A, 90)))  # JPEG noise
     assert not loopguard.same_screen(sa, loopguard.signature(png_with("hi")))           # two typed characters
     assert not loopguard.same_screen(sa, loopguard.signature(B))                        # a dialog opened
 
 
-def _jpeg(png: bytes) -> bytes:
+def _jpeg(png: bytes, quality: int = 90) -> bytes:
     buf = io.BytesIO()
-    Image.open(io.BytesIO(png)).convert("RGB").save(buf, format="JPEG", quality=70)
+    Image.open(io.BytesIO(png)).convert("RGB").save(buf, format="JPEG", quality=quality)
     return buf.getvalue()
+
+
+def _phone_screen(draw) -> bytes:
+    """A 720x1600 JPEG at quality 90, like the Android app sends."""
+    img = Image.new("RGB", (720, 1600), (250, 250, 250))
+    d = ImageDraw.Draw(img)
+    d.text((40, 300), "Timer", fill=(0, 0, 0), font=ImageFont.load_default(size=30))
+    draw(d)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+def test_small_counter_steps_and_colour_only_changes_count_as_changes():
+    font = ImageFont.load_default(size=20)  # ~12sp on a 720-wide screenshot
+    for n in range(1, 26):
+        a = _phone_screen(lambda d: d.text((300, 800), str(n), fill=(0, 0, 0), font=font))
+        b = _phone_screen(lambda d: d.text((300, 800), str(n + 1), fill=(0, 0, 0), font=font))
+        assert not loopguard.same_screen(loopguard.signature(a), loopguard.signature(b)), n
+    red = _phone_screen(lambda d: d.rounded_rectangle((40, 1000, 240, 1060), 20, fill=(200, 80, 80)))
+    green = _phone_screen(lambda d: d.rounded_rectangle((40, 1000, 240, 1060), 20, fill=(80, 140, 80)))
+    assert not loopguard.same_screen(loopguard.signature(red), loopguard.signature(green))
 
 
 def test_guard_flags_no_effect_and_stuck_after_repeats():
@@ -186,7 +208,7 @@ def test_task_file_is_well_formed():
     for t in tasks:
         assert t["task"]
         for c in run_evals.checks_of(t):
-            assert c["check"] and sum(k in c for k in ("expect", "expect_contains", "expect_nonzero", "expect_changed")) == 1
+            assert c["check"]
 
 
 def test_wilson_interval():
@@ -207,4 +229,19 @@ def test_summary_metrics():
     assert s["runs"] == 4 and s["invalid_runs"] == 1
     assert s["success_rate"] == 0.75 and s["pass_at_k"] == 1.0 and s["pass_hat_k"] == 0.5
     assert s["false_success_rate"] == round(1 / 3, 3) and s["avg_steps"] == 3.5
-    assert s["per_task"] == {"a": "1/2", "b": "2/2"}
+    assert s["per_task"] == {"a": "1/2", "b": "2/2", "c": "0/0"}
+    assert s["k"] == 2 and s["tasks_with_k_valid_runs"] == "2/3"
+
+
+def test_pass_hat_k_ignores_tasks_missing_valid_repeats():
+    rows = [{"task": "a", "success": True}, {"task": "a", "success": False},
+            {"task": "b", "success": True}, {"task": "b", "success": False, "invalid": True}]
+    s = stats.summarize(rows)
+    assert s["pass_hat_k"] == 0.0 and s["pass_at_k"] == 1.0   # only task a has both repeats
+
+
+def test_malformed_checks_are_rejected():
+    for bad in ({"id": "x", "checks": []}, {"id": "x", "checks": [{"check": "ls"}]},
+                {"id": "x", "check": "ls", "expect": "1", "expect_nonzero": True}):
+        with pytest.raises(ValueError):
+            run_evals.checks_of(bad)

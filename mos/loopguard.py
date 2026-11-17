@@ -9,37 +9,45 @@ screenshot with the one the previous action was taken on:
 - the run is "stuck" when the same action had no effect `max_repeats` times in a
   row, or the model waited `max_waits` times in a row on an unchanged screen.
 
-Screens are compared on a grayscale thumbnail without the status bar, so the clock
-ticking or image compression noise doesn't count as a change, but a new page, a
-dialog, a flipped switch, a changed digit or two typed characters do. The check
-errs towards "changed": a blinking text cursor also counts, which can only make
-the guard miss a loop, never stop a run that was making progress.
+Screens are compared on a colour thumbnail without the status bar, so the clock
+ticking or JPEG noise doesn't count as a change, but a new page, a dialog, a
+flipped switch, a re-tinted chip, a counter going up or two typed characters do.
+The check errs towards "changed" (a blinking text cursor counts too), so it is
+more likely to miss a loop than to stop a run that was making progress. Tiny
+changes, like a single "." typed in 12sp text, can still read as "no effect".
 """
 from __future__ import annotations
 
 import io
 from dataclasses import dataclass, field
 
-from PIL import Image
+from PIL import Image, ImageChops
 
 THUMB = (180, 320)        # width x height of the comparison thumbnail (~6x7 screen pixels per cell)
 STATUS_BAR = 0.05         # top fraction of the screen ignored (clock, notification icons)
-PIXEL_DIFF = 24           # a thumbnail pixel "changed" if its gray level moved more than this
+PIXEL_DIFF = 12           # a thumbnail pixel "changed" if any colour channel moved more than this
 MIN_CHANGED = 4           # screens differ if at least this many thumbnail pixels changed
 EFFECTFUL = {"click", "long_press", "swipe", "drag", "type", "system_button", "open"}
 
 
 def signature(png: bytes) -> bytes:
-    img = Image.open(io.BytesIO(png)).convert("L")
+    img = Image.open(io.BytesIO(png)).convert("RGB")
     w, h = img.size
     img = img.crop((0, int(h * STATUS_BAR), w, h)).resize(THUMB, Image.BOX)
     return img.tobytes()
 
 
+def changed_pixels(a: bytes, b: bytes) -> int:
+    diff = ImageChops.difference(Image.frombytes("RGB", THUMB, a), Image.frombytes("RGB", THUMB, b))
+    r, g, bl = diff.split()
+    worst = ImageChops.lighter(r, ImageChops.lighter(g, bl))
+    return worst.point(lambda v: 255 if v > PIXEL_DIFF else 0).histogram()[255]
+
+
 def same_screen(a: bytes, b: bytes) -> bool:
     if len(a) != len(b):
         return False
-    return sum(abs(x - y) > PIXEL_DIFF for x, y in zip(a, b)) < MIN_CHANGED
+    return changed_pixels(a, b) < MIN_CHANGED
 
 
 def action_key(args: dict) -> tuple:
@@ -58,7 +66,7 @@ def action_key(args: dict) -> tuple:
 @dataclass
 class LoopGuard:
     max_repeats: int = 3
-    max_waits: int = 5
+    max_waits: int = 10       # ~25 s of a frozen screen (each wait is 2 s plus settling)
     _prev_sig: bytes | None = None
     _prev_args: dict | None = None
     _streak_key: tuple | None = None

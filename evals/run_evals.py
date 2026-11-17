@@ -27,8 +27,20 @@ from evals.stats import summarize
 Shell = Callable[[str], str]
 
 
+EXPECT_KEYS = ("expect", "expect_contains", "expect_nonzero", "expect_changed")
+
+
 def checks_of(task: dict) -> list[dict]:
-    return task.get("checks") or [{k: v for k, v in task.items() if k.startswith(("check", "expect"))}]
+    if "checks" in task:
+        cs = task["checks"]
+    else:
+        cs = [{k: v for k, v in task.items() if k == "check" or k.startswith("expect")}]
+    for c in cs:
+        if not c.get("check") or sum(k in c for k in EXPECT_KEYS) != 1:
+            raise ValueError(f"task {task.get('id')!r}: each check needs a command and exactly one of {EXPECT_KEYS}")
+    if not cs:
+        raise ValueError(f"task {task.get('id')!r} has no checks")
+    return cs
 
 
 def passes(c: dict, out: str, before: str | None = None) -> bool:
@@ -69,6 +81,8 @@ def load_tasks(path: str, only: list[str] | None = None) -> list[dict]:
         if missing:
             raise SystemExit(f"unknown task ids: {sorted(missing)}")
         tasks = [t for t in tasks if t["id"] in only]
+    for t in tasks:
+        checks_of(t)  # fail fast on a malformed task file
     return tasks
 
 
@@ -97,7 +111,8 @@ def main() -> None:
     from mos.device import AdbDevice  # imported here so the scoring helpers above stay importable without adb
     tasks = load_tasks(a.tasks, a.only)
     dev = AdbDevice(serial=a.serial)
-    shell: Shell = dev._shell
+    # `; true`: a check like `grep -c` exits 1 when it counts 0, which adb passes back as an error.
+    shell: Shell = lambda cmd: dev._shell(f"{cmd}; true")
     out_dir = Path("runs") / "evals" / time.strftime("%Y%m%d-%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
     meta = {"git": git_sha(), "server": a.server, "modes": a.modes, "repeats": a.repeats,
@@ -120,15 +135,25 @@ def main() -> None:
                         subprocess.run(["adb"] + (["-s", a.serial] if a.serial else []) +
                                        ["emu", "avd", "snapshot", "load", a.snapshot], check=False)
                         time.sleep(2)  # let the restored UI settle
-                    before = snapshot_outputs(shell, t)
                     row = {"mode": mode, "task": t["id"], "rep": rep}
-                    if already_done(t, before):
+                    try:
+                        before = snapshot_outputs(shell, t)
+                    except Exception as e:  # noqa: BLE001 - device trouble shouldn't end the whole eval
+                        row.update(invalid=True, success=False, note=f"pre-check failed: {e}")
+                        before = None
+                    if before is not None and already_done(t, before):
                         row.update(invalid=True, success=False, note="task already satisfied before the run")
-                    else:
+                    elif before is not None:
                         t0 = time.time()
-                        row.update(run_agent(a, dev, mode, t))
+                        try:
+                            row.update(run_agent(a, dev, mode, t))
+                        except Exception as e:  # noqa: BLE001 - counted as a failed run, and we move on
+                            row.update(status="error", self_report=False, note=f"run crashed: {e}")
                         row["seconds"] = round(time.time() - t0, 1)
-                        row["success"] = task_passes(shell, t, before)
+                        try:
+                            row["success"] = task_passes(shell, t, before)
+                        except Exception as e:  # noqa: BLE001
+                            row.update(invalid=True, success=False, note=f"check failed: {e}")
                     rows.append(row)
                     f.write(json.dumps(row) + "\n")
                     f.flush()
