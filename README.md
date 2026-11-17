@@ -17,6 +17,7 @@ deleting, and the overlay has a Stop button.
 |---|---|---|
 | `mos/server.py` | GPU server | Sessions, MAI-UI prompting, maps 0-999 coords to pixels, safety check, logs every run |
 | `mos/maiui.py` | GPU server | MAI-UI prompt and output format, matching the official agent |
+| `mos/guiowl.py` | GPU server | GUI-Owl-1.5 prompt and output format (the A/B alternative), matching its official agent |
 | `mos/safety.py` | GPU server | Flags taps on Send/Pay/Delete-like buttons, typing into password fields, card numbers |
 | `mos/loopguard.py` | GPU server | Notices actions that didn't change the screen and ends runs that are stuck repeating them |
 | `android/` | phones | The app: accessibility service (screen, UI tree, gestures, text, keys), overlay, settings |
@@ -55,7 +56,8 @@ export MOS_TOKEN=$(openssl rand -hex 16)     # give this to each phone
 MOS_LLM_URL=http://127.0.0.1:8000/v1 uvicorn mos.server:app --host 0.0.0.0 --port 8080
 ```
 
-Settings (env vars): `MOS_TOKEN` (required), `MOS_LLM_URL`, `MOS_LLM_MODEL`,
+Settings (env vars): `MOS_TOKEN` (required), `MOS_POLICY` (`maiui` default, or `guiowl`),
+`MOS_LLM_URL`, `MOS_LLM_MODEL`,
 `MOS_RUNS` (log folder, default `runs/server`), `MOS_MAX_STEPS` (default 40),
 `MOS_NO_EFFECT_HINT` (`1` tells the model when its last action changed nothing; off
 until the evals show it helps).
@@ -72,6 +74,17 @@ With the emulator running (`adb devices` shows it), the GPU server up, and your 
 python -m mos.remote "Turn on dark theme" --server http://mos-gpu:8080 --token $MOS_TOKEN
 python -m evals.run_evals --server http://mos-gpu:8080 --token $MOS_TOKEN   # scored by device state
 ```
+
+To compare models, start the GPU server once with each policy and run the same evals:
+
+```bash
+./scripts/start_gpu_server.sh                       # MAI-UI-8B
+MOS_POLICY=guiowl ./scripts/start_gpu_server.sh     # GUI-Owl-1.5-8B-Instruct (MIT)
+python -m evals.run_evals --server http://mos-gpu:8080 --token $MOS_TOKEN --repeats 3 --label maiui
+```
+
+The emulator client sends screenshots shrunk and JPEG-encoded exactly like the phone app,
+so eval numbers reflect what phones will see.
 
 `evals/run_evals.py` loads the emulator snapshot named `clean` before each task and
 judges each run by device state (`adb shell` checks in `evals/tasks.jsonl`). If a task

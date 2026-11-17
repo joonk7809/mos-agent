@@ -5,7 +5,7 @@
 One sample per step of each successful session, in the multimodal chat format
 used by ms-swift / LLaMA-Factory: {"messages": [...], "images": [...]}, where each
 "<image>" in a message is filled by the next path in "images". The context is
-built exactly as at inference time (mos.maiui.build_messages), so the model is
+built exactly as at inference time (the policy's build_messages), so the model is
 trained on what it will actually see.
 
 Sessions you fixed by hand: edit steps.jsonl (the "args" field) before exporting,
@@ -14,10 +14,11 @@ or record a demonstration and log it in the same format.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 
-from . import maiui
+from . import maiui, policies
 
 
 def load_session(d: Path) -> tuple[dict, list[dict]] | None:
@@ -36,34 +37,44 @@ def load_session(d: Path) -> tuple[dict, list[dict]] | None:
     return json.loads(final.read_text()), actions
 
 
-def session_samples(d: Path, history_n: int = 3) -> list[dict]:
+def session_samples(d: Path, history_n: int | None = None) -> list[dict]:
     loaded = load_session(d)
     if not loaded:
         return []
     final, steps = loaded
-    system = maiui.system_prompt(final.get("apps", []))
+    pol = policies.get(final.get("policy"))  # sessions logged before policies existed are MAI-UI
+    system = pol.system_prompt(final.get("apps", []))
     task = (d / "task.txt").read_text()
     samples = []
     past: list[maiui.Step] = []
     for s in steps:
-        img = d / f"step_{s['step']:02d}.png"
-        thinking, args = maiui.parse_response(s["raw"]) if "raw" in s else ("", s["args"])
-        msgs = maiui.build_messages(system, task, past, b"", history_n)
+        # The thinking comes from the model's raw reply; the action from "args", so a step you
+        # corrected by hand in steps.jsonl is what gets trained on.
+        thinking = pol.parse_response(s["raw"])[0] if "raw" in s else s.get("thinking", "")
+        args = s["args"]
+        # Build the context exactly as at inference, with marker "images" standing in for
+        # screenshots, then swap each marker for an <image> placeholder plus its file path.
+        msgs = pol.build_messages(system, task, past, _marker(s["step"]), history_n or pol.HISTORY_N)
         images: list[str] = []
-        # replace inline image payloads with placeholders, in order
-        hist_imgs = [str(d / f"step_{p_idx:02d}.png") for p_idx in range(len(past))]
-        first_with_image = max(0, len(past) - (history_n - 1))
-        images += hist_imgs[first_with_image:] + [str(img)]
         out = []
         for m in msgs:
             parts = []
             for c in m["content"]:
-                parts.append("<image>" if c["type"] == "image_url" else c["text"])
+                if c["type"] == "image_url":
+                    idx = int(base64.b64decode(c["image_url"]["url"].split(",", 1)[1]).decode().split(":")[1])
+                    images.append(str(d / f"step_{idx:02d}.png"))
+                    parts.append("<image>")
+                else:
+                    parts.append(c["text"])
             out.append({"role": m["role"], "content": "".join(parts)})
-        out.append({"role": "assistant", "content": maiui.format_response(thinking, args)})
+        out.append({"role": "assistant", "content": pol.format_response(thinking, args)})
         samples.append({"messages": out, "images": images})
-        past.append(maiui.Step(png=b"", thinking=thinking, args=args, user_text=s.get("user_text")))
+        past.append(maiui.Step(png=_marker(s["step"]), thinking=thinking, args=args, user_text=s.get("user_text")))
     return samples
+
+
+def _marker(step: int) -> bytes:
+    return f"MOSIMG:{step}".encode()
 
 
 def main() -> None:

@@ -31,7 +31,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from . import loopguard, maiui, safety
+from . import loopguard, maiui, policies, safety
 
 MAX_STEPS = int(os.environ.get("MOS_MAX_STEPS", "40"))
 # Tell the model when its last action didn't change the screen. Off by default until the
@@ -127,10 +127,12 @@ def to_device_action(args: dict, s: Session) -> dict:
     raise ValueError(f"unsupported action {kind!r}")
 
 
-def create_app(llm=None, run_root: Path | None = None, token: str | None = None) -> FastAPI:
+def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
+               policy: str | None = None) -> FastAPI:
+    pol = policies.get(policy or os.environ.get("MOS_POLICY"))
     llm = llm or maiui.ChatClient(
         base_url=os.environ.get("MOS_LLM_URL", "http://localhost:8000/v1"),
-        model=os.environ.get("MOS_LLM_MODEL", "MAI-UI-8B"),
+        model=os.environ.get("MOS_LLM_MODEL", "MAI-UI-8B" if pol is maiui else "GUI-Owl-1.5-8B-Instruct"),
         api_key=os.environ.get("MOS_LLM_KEY", "EMPTY"))
     run_root = run_root or Path(os.environ.get("MOS_RUNS", "runs/server"))
     token = token if token is not None else os.environ.get("MOS_TOKEN", "")
@@ -151,12 +153,12 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None)
         s.status = status
         (s.dir / "final.json").write_text(json.dumps({
             "task": s.task, "status": status, "steps": len(s.steps),
-            "no_effect_actions": s.guard.no_effect_total,
+            "no_effect_actions": s.guard.no_effect_total, "policy": pol.NAME,
             "screen": s.screen.model_dump(), "apps": [a.label for a in s.apps]}, ensure_ascii=False))
 
     @app.get("/healthz")
     def healthz():
-        return {"ok": True, "model": getattr(llm, "model", "?")}
+        return {"ok": True, "model": getattr(llm, "model", "?"), "policy": pol.NAME}
 
     @app.post("/v1/sessions", dependencies=[Depends(auth)])
     def start(req: StartRequest):
@@ -199,7 +201,7 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None)
         labels = [a.label for a in s.apps]
         t0 = time.time()
         try:
-            raw, thinking, args = maiui.predict(llm, maiui.system_prompt(labels), s.task, s.steps, png)
+            raw, thinking, args = maiui.predict(llm, pol.system_prompt(labels), s.task, s.steps, png, policy=pol)
             action = to_device_action(args, s)
         except Exception as e:  # model or parse failure: stop cleanly, keep the log
             log(s, {"step": n, "error": str(e)})

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import io
 import json
 import os
 import time
@@ -39,6 +40,22 @@ def launcher_apps(device: AdbDevice) -> list[dict]:
     pkgs = sorted({line.strip().split("/")[0] for line in out.splitlines() if "/" in line})
     return [{"label": KNOWN_LABELS.get(p, p.rsplit(".", 1)[-1].replace("_", " ").title()), "package": p}
             for p in pkgs]
+
+
+MAX_SCREENSHOT_EDGE = 1600  # same as the Android app (MosAccessibilityService)
+
+
+def phone_like(png: bytes) -> bytes:
+    """Shrink and JPEG-encode a screenshot the way the phone app does, so the emulator dev
+    loop and the evals show the model the same images real phones will."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(png)).convert("RGB")
+    scale = MAX_SCREENSHOT_EDGE / max(img.size)
+    if scale < 1:
+        img = img.resize((round(img.width * scale), round(img.height * scale)), Image.BILINEAR)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
 
 
 def swipe_vector(direction: str, x: int, y: int, w: int, h: int) -> tuple[int, int, int, int]:
@@ -102,7 +119,7 @@ class RemoteRunner:
         self.session_id, self.steps = sid, 0
         extra: dict = {}
         while True:
-            png = self.device.screenshot_png()
+            png = phone_like(self.device.screenshot_png())
             elements = [e.to_dict() for e in uitree.parse(self.device.ui_xml())]
             r = self.post(f"/v1/sessions/{sid}/step", {
                 "screenshot_b64": base64.b64encode(png).decode(), "elements": elements, **extra})

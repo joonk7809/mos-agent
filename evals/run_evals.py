@@ -121,7 +121,8 @@ def main() -> None:
         try:
             import urllib.request
             with urllib.request.urlopen(a.server.rstrip("/") + "/healthz", timeout=10) as r:
-                meta["model"] = json.loads(r.read()).get("model")
+                health = json.loads(r.read())
+                meta["model"], meta["policy"] = health.get("model"), health.get("policy")
         except Exception as e:  # noqa: BLE001 - recorded, not fatal
             meta["model"] = f"unreachable: {e}"
     (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))

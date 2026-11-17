@@ -17,6 +17,8 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 
+NAME = "maiui"
+HISTORY_N = 3
 SCALE = 999
 RETRY_TEMPERATURE = 0.7
 
@@ -172,21 +174,30 @@ class ChatClient:
 
 
 def predict(client, system: str, task: str, steps: list[Step], png: bytes,
-            history_n: int = 3, retries: int = 3) -> tuple[str, str, dict]:
+            history_n: int | None = None, retries: int = 3, policy=None) -> tuple[str, str, dict]:
     """Ask the model for the next action. Returns (raw_text, thinking, args).
+
+    `policy` is the module that knows the model's prompt and action format
+    (this module for MAI-UI, mos.guiowl for GUI-Owl); see mos.policies.
 
     Decoding is greedy, so asking again with the same settings would give the same
     unparseable answer. Retries sample at a higher temperature instead.
     """
     last_err: Exception | None = None
-    messages = build_messages(system, task, steps, png, history_n)
+    policy = policy or _this()
+    messages = policy.build_messages(system, task, steps, png, history_n or policy.HISTORY_N)
     for attempt in range(retries):
         overrides = {"temperature": RETRY_TEMPERATURE} if attempt else None
         raw = client.complete(messages, overrides) if overrides else client.complete(messages)
         try:
-            thinking, args = parse_response(raw)
+            thinking, args = policy.parse_response(raw)
             return raw, thinking, args
         except ParseError as e:
             last_err = e
             time.sleep(0.2 * attempt)
     raise ParseError(f"model gave no parseable action after {retries} tries: {last_err}")
+
+
+def _this():
+    import sys
+    return sys.modules[__name__]
