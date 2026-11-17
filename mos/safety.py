@@ -49,6 +49,6 @@ def needs_confirmation(action: dict, elements: list[dict]) -> str | None:
         focused = next((e for e in elements if e.get("focused") and e.get("editable")), None)
         if focused and focused.get("password"):
             return "Type into a password field"
-        if re.search(r"\b\d{12,19}\b", action.get("text", "").replace(" ", "")):
+        if re.search(r"\b\d{12,19}\b", re.sub(r"[\s-]", "", action.get("text", ""))):
             return "Type what looks like a card number"
     return None

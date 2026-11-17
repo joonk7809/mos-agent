@@ -13,8 +13,8 @@ import json
 import os
 import time
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from . import uitree
 from .device import AdbDevice, Device
@@ -110,6 +110,8 @@ class RemoteRunner:
             if r["done"]:
                 self.log(f"done: {r['status']}  (session {sid})")
                 return r["status"]
+            if a is None:
+                raise RuntimeError(f"server returned no action for a running session: {r}")
             if r.get("confirm") and not self.confirm(r["confirm"]):
                 extra = {"declined": True}
                 continue

@@ -1,0 +1,28 @@
+# Tool config only; the project is run from source (see README).
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["android"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, isort, bugbear, pyupgrade, simplify, blind-except
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "BLE"]
+ignore = ["E501", "E731", "E741"]  # long prompt strings; short lambdas and `l` in comprehensions are fine here
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["mos", "evals"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+check_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+# The Claude baseline passes plain dicts to the SDK's TypedDict overloads.
+module = "mos.agent"
+disable_error_code = ["call-overload"]

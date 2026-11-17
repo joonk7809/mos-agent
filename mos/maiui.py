@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import re
 import time
 import urllib.request
@@ -87,8 +88,11 @@ def parse_response(text: str) -> tuple[str, dict]:
 
 
 def _point(c) -> list[float]:
+    """A point (or a box's center) as two finite floats; anything else is a ParseError."""
     if not isinstance(c, (list, tuple)) or len(c) not in (2, 4):
         raise ParseError(f"bad coordinate {c!r}")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in c):
+        raise ParseError(f"non-numeric coordinate {c!r}")
     if len(c) == 4:  # a box: use its center
         return [(c[0] + c[2]) / 2, (c[1] + c[3]) / 2]
     return [float(c[0]), float(c[1])]
