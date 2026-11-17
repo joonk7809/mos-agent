@@ -103,11 +103,13 @@ LLaMA-Factory multimodal layout) for a QLoRA fine-tune on the same rented GPU (a
 ## Tests
 
 ```bash
-pip install -r requirements.txt && pytest                           # 20 Python tests
+pip install -r requirements-dev.txt && scripts/check.sh            # ruff + mypy + Python tests
 cd android && ./gradlew -Pmos.coreOnly :core:test                   # protocol tests, no Android SDK needed
 ```
 
 CI (`.github/workflows/ci.yml`) runs both and builds the APK.
+
+Working on this repo with Claude Code: see [`CLAUDE.md`](CLAUDE.md) and [docs/agentic-workflow.md](docs/agentic-workflow.md). Decisions are logged in [docs/decisions/](docs/decisions/README.md).
 
 ## Known limits
 

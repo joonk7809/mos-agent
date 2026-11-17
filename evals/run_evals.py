@@ -44,7 +44,7 @@ def main() -> None:
     if a.server:
         a.modes = ["server"]
 
-    tasks = [json.loads(l) for l in open(a.tasks) if l.strip()]
+    tasks = [json.loads(l) for l in Path(a.tasks).read_text().splitlines() if l.strip()]
     dev = AdbDevice(serial=a.serial)
     rows = []
     for mode in a.modes:
