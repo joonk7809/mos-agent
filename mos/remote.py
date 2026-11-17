@@ -92,11 +92,14 @@ class RemoteRunner:
     ask: Callable[[str], str] = lambda q: input(f"\n❓ {q}\n> ")
     log: Callable[[str], None] = print
     apps: list[dict] | None = None
+    steps: int = 0            # model steps in the last run
+    session_id: str = ""      # server session of the last run (logs: runs/server/<id>/)
 
     def run(self, task: str) -> str:
         w, h = self.device.screen_size()
         apps = self.apps if self.apps is not None else launcher_apps(self.device)  # type: ignore[arg-type]
         sid = self.post("/v1/sessions", {"task": task, "apps": apps, "screen": {"width": w, "height": h}})["session_id"]
+        self.session_id, self.steps = sid, 0
         extra: dict = {}
         while True:
             png = self.device.screenshot_png()
@@ -104,6 +107,7 @@ class RemoteRunner:
             r = self.post(f"/v1/sessions/{sid}/step", {
                 "screenshot_b64": base64.b64encode(png).decode(), "elements": elements, **extra})
             extra = {}
+            self.steps = r.get("step", 0) + (1 if r.get("action") else 0)
             a = r.get("action")
             if a:
                 self.log(f"[{r['step']}] {r.get('thinking', '')[:120]}\n     -> {json.dumps(a, ensure_ascii=False)}")

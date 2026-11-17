@@ -25,7 +25,15 @@ def load_session(d: Path) -> tuple[dict, list[dict]] | None:
     if not final.exists():
         return None
     steps = [json.loads(l) for l in (d / "steps.jsonl").read_text().splitlines() if l.strip()]
-    return json.loads(final.read_text()), [s for s in steps if "args" in s]
+    texts: dict[int, str] = {}  # step index -> user text the model saw after that step
+    for s in steps:
+        if s.get("event") == "user_text":
+            texts[s["step"]] = s["text"]
+    actions = [s for s in steps if "args" in s]
+    for s in actions:
+        if s["step"] in texts:
+            s["user_text"] = texts[s["step"]]
+    return json.loads(final.read_text()), actions
 
 
 def session_samples(d: Path, history_n: int = 3) -> list[dict]:
@@ -54,7 +62,7 @@ def session_samples(d: Path, history_n: int = 3) -> list[dict]:
             out.append({"role": m["role"], "content": "".join(parts)})
         out.append({"role": "assistant", "content": maiui.format_response(thinking, args)})
         samples.append({"messages": out, "images": images})
-        past.append(maiui.Step(png=b"", thinking=thinking, args=args))
+        past.append(maiui.Step(png=b"", thinking=thinking, args=args, user_text=s.get("user_text")))
     return samples
 
 

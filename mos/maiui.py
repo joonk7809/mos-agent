@@ -18,6 +18,7 @@ import urllib.request
 from dataclasses import dataclass, field
 
 SCALE = 999
+RETRY_TEMPERATURE = 0.7
 
 _SYSTEM_TEMPLATE = """You are a GUI agent. You are given a task and your action history, with screenshots. You need to perform the next action to complete the task.
 
@@ -63,6 +64,15 @@ class ParseError(ValueError):
     pass
 
 
+# Arguments each action must carry; anything else is a malformed answer worth retrying.
+REQUIRED = {
+    "click": ("coordinate",), "long_press": ("coordinate",), "type": ("text",),
+    "swipe": ("direction",), "open": ("text",), "drag": ("start_coordinate", "end_coordinate"),
+    "system_button": ("button",), "wait": (), "terminate": (), "answer": ("text",),
+    "ask_user": ("text",),
+}
+
+
 def parse_response(text: str) -> tuple[str, dict]:
     """Return (thinking, arguments) from a raw model response. Coordinates stay in 0..999."""
     text = text.strip()
@@ -80,6 +90,12 @@ def parse_response(text: str) -> tuple[str, dict]:
     args = call.get("arguments") if isinstance(call, dict) else None
     if not isinstance(args, dict) or "action" not in args:
         raise ParseError("tool_call has no arguments.action")
+    kind = args["action"]
+    if kind not in REQUIRED:
+        raise ParseError(f"unknown action {kind!r}")
+    missing = [k for k in REQUIRED[kind] if k not in args]
+    if missing:
+        raise ParseError(f"{kind} is missing {', '.join(missing)}")
     for key in ("coordinate", "start_coordinate", "end_coordinate"):
         if key in args:
             args[key] = _point(args[key])
@@ -146,8 +162,8 @@ class ChatClient:
     timeout_s: float = 120
     params: dict = field(default_factory=lambda: {"max_tokens": 2048, "temperature": 0.0, "top_p": 1.0})
 
-    def complete(self, messages: list[dict]) -> str:
-        body = json.dumps({"model": self.model, "messages": messages, **self.params}).encode()
+    def complete(self, messages: list[dict], overrides: dict | None = None) -> str:
+        body = json.dumps({"model": self.model, "messages": messages, **self.params, **(overrides or {})}).encode()
         req = urllib.request.Request(self.base_url.rstrip("/") + "/chat/completions", data=body, headers={
             "Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"})
         with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
@@ -156,10 +172,16 @@ class ChatClient:
 
 def predict(client, system: str, task: str, steps: list[Step], png: bytes,
             history_n: int = 3, retries: int = 3) -> tuple[str, str, dict]:
-    """Ask the model for the next action. Returns (raw_text, thinking, args)."""
+    """Ask the model for the next action. Returns (raw_text, thinking, args).
+
+    Decoding is greedy, so asking again with the same settings would give the same
+    unparseable answer. Retries sample at a higher temperature instead.
+    """
     last_err: Exception | None = None
+    messages = build_messages(system, task, steps, png, history_n)
     for attempt in range(retries):
-        raw = client.complete(build_messages(system, task, steps, png, history_n))
+        overrides = {"temperature": RETRY_TEMPERATURE} if attempt else None
+        raw = client.complete(messages, overrides) if overrides else client.complete(messages)
         try:
             thinking, args = parse_response(raw)
             return raw, thinking, args
