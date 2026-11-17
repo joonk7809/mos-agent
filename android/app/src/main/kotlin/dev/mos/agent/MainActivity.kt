@@ -21,6 +21,14 @@ class MainActivity : Activity() {
     private lateinit var task: EditText
     private lateinit var state: TextView
 
+    // On a MOS ROM phone the bridge turns the agent's accessibility service on, so there's
+    // no trip through accessibility settings or Android's "restricted settings" step.
+    private val bridge = BridgeClient(this) { b ->
+        if (MosAccessibilityService.instance == null && b.call { it.enableAgentAccessibility() }) {
+            runOnUiThread { state.postDelayed({ refreshState() }, 1000) }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val pad = (16 * resources.displayMetrics.density).toInt()
@@ -55,8 +63,22 @@ class MainActivity : Activity() {
         })
     }
 
+    override fun onStart() {
+        super.onStart()
+        bridge.connect()
+    }
+
+    override fun onStop() {
+        bridge.disconnect()
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
+        refreshState()
+    }
+
+    private fun refreshState() {
         state.text = if (MosAccessibilityService.instance != null) "Agent service: on"
         else "Agent service: off. Turn on \"MOS agent\" in accessibility settings."
     }

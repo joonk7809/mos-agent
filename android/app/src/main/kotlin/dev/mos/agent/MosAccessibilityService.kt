@@ -9,6 +9,7 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.util.Base64
 import android.view.Display
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -26,6 +27,8 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * The agent's eyes and hands: screenshots, the UI tree, gestures, text and keys,
  * all through the accessibility APIs (no root, no ADB, works after reboot).
+ * On a MOS ROM phone, taps, swipes and keys go through the privileged bridge instead
+ * ([BridgeClient]), falling back to accessibility whenever the bridge refuses.
  */
 class MosAccessibilityService : AccessibilityService() {
 
@@ -41,11 +44,13 @@ class MosAccessibilityService : AccessibilityService() {
     lateinit var overlay: Overlay
         private set
     private val executor = Executors.newSingleThreadExecutor()
+    private val bridge = BridgeClient(this)
     private var loop: AgentLoop? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         overlay = Overlay(this)
+        bridge.connect()
         instance = this
     }
 
@@ -56,6 +61,7 @@ class MosAccessibilityService : AccessibilityService() {
         loop?.stop()
         if (::overlay.isInitialized) overlay.remove()
         instance = null
+        bridge.disconnect()
         executor.shutdownNow()
         super.onDestroy()
     }
@@ -155,19 +161,29 @@ class MosAccessibilityService : AccessibilityService() {
     fun execute(a: DeviceAction): String {
         val (w, h) = screenSize()
         return when (a) {
-            is DeviceAction.Click -> gesture(stroke(a.x, a.y, a.x, a.y, 60)).let { "tap" }
-            is DeviceAction.LongPress -> gesture(stroke(a.x, a.y, a.x, a.y, 800)).let { "long press" }
+            is DeviceAction.Click -> move(a.x, a.y, a.x, a.y, 60).let { "tap" }
+            is DeviceAction.LongPress -> move(a.x, a.y, a.x, a.y, 800).let { "long press" }
             is DeviceAction.Swipe -> {
                 val p = Geometry.swipe(a.direction, a.x ?: w / 2, a.y ?: h / 2, w, h)
-                gesture(stroke(p[0], p[1], p[2], p[3], 350)); "swipe ${a.direction}"
+                move(p[0], p[1], p[2], p[3], 350); "swipe ${a.direction}"
             }
-            is DeviceAction.Drag -> gesture(stroke(a.x1, a.y1, a.x2, a.y2, 1000)).let { "drag" }
+            is DeviceAction.Drag -> move(a.x1, a.y1, a.x2, a.y2, 1000).let { "drag" }
             is DeviceAction.Type -> typeText(a.text)
             is DeviceAction.Key -> key(a.name)
             is DeviceAction.Open -> openApp(a)
             is DeviceAction.Wait -> { Thread.sleep(a.ms); "wait" }
             is DeviceAction.AskUser, is DeviceAction.Answer, is DeviceAction.Terminate -> "no-op"
         }
+    }
+
+    /** One touch stroke: through the bridge on MOS ROM phones, else an accessibility gesture. */
+    private fun move(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long) {
+        val viaBridge = if (x1 == x2 && y1 == y2) {
+            bridge.call { it.tap(x1, y1, ms) }
+        } else {
+            bridge.call { it.swipe(x1, y1, x2, y2, ms) }
+        }
+        if (!viaBridge) gesture(stroke(x1, y1, x2, y2, ms))
     }
 
     private fun stroke(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long): GestureDescription.StrokeDescription {
@@ -197,13 +213,23 @@ class MosAccessibilityService : AccessibilityService() {
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, existing + text)
         }
-        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+        if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args) &&
+            !bridge.call { it.text(text) }
+        ) {
             throw IllegalStateException("field did not accept text")
         }
         return "typed ${text.length} chars"
     }
 
     private fun key(name: String): String {
+        val code = when (name.lowercase()) {
+            "back" -> KeyEvent.KEYCODE_BACK
+            "home" -> KeyEvent.KEYCODE_HOME
+            "menu" -> KeyEvent.KEYCODE_APP_SWITCH
+            "enter" -> KeyEvent.KEYCODE_ENTER
+            else -> throw IllegalArgumentException("unknown key $name")
+        }
+        if (bridge.call { it.key(code) }) return "key $name"
         val ok = when (name.lowercase()) {
             "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
             "home" -> performGlobalAction(GLOBAL_ACTION_HOME)

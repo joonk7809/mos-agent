@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Placeholder. rom/build.sh overwrites this with the SHA-256 digest of the MOS app's
+     signing certificate (rom/tools/pin_cert.py). With this placeholder no app matches,
+     so the bridge refuses every caller: the safe default. -->
+<resources>
+    <string-array name="mos_known_certs">
+        <item>0000000000000000000000000000000000000000000000000000000000000000</item>
+    </string-array>
+</resources>

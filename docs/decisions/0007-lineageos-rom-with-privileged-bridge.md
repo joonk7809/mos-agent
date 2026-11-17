@@ -1,0 +1,28 @@
+# 0007. Build a LineageOS-based MOS ROM with a small privileged input bridge
+
+- Status: Accepted
+- Date: 2026-11-17
+- Deciders: joon (custom ROM now, accepting broken banking/wallet apps and ROM upkeep); agent (bridge design, signing, build approach)
+
+## Context
+The scoping review recommended staying app-first and gating a custom ROM behind usage gates. joon chose "Custom ROM phone now" on 2026-11-17: he wants system-level agent control on a dedicated Pixel. Accessibility-only control has known limits (ADR 0003): gestures some apps ignore, `ACTION_SET_TEXT` that some fields reject, the Android 13+ "restricted settings" step, and Android 17 Advanced Protection blocking non-verified accessibility apps.
+
+LineageOS 24.0 builds weekly for every Pixel from the 6a to the 10, and TheMuppets publish the vendor blobs, so a Lineage base needs no device bring-up. Lineage inherits `vendor/extra/product.mk` if present, so MOS can add packages without forking any Lineage repo.
+
+## Decision
+We will ship MOS as an overlay on stock LineageOS (`rom/vendor-extra/` copied to `vendor/extra/`) built by `rom/build.sh` on a rented box. System-level control comes from **MosBridge**, a separate, minimal platform-signed priv-app exposing an AIDL service (tap, swipe, allowlisted keys, text, enable the agent's accessibility service). The agent app stays a normal app signed with its own key; the bridge grants access only to that key, through `dev.mos.permission.BRIDGE` with `signature|knownSigner` and the key's SHA-256 pinned at build time. The bridge re-checks the permission on every call, refuses input while the keyguard is locked, refuses off-screen coordinates, never presses power/volume/call/camera keys, and does no networking and no screen reading. Screenshots and the UI tree stay on accessibility. Builds always use private release keys, never Lineage's public test keys.
+
+## Alternatives considered
+- **Make the agent app itself platform-signed** - one APK, but the network-facing app would run with platform powers, and every app update would need the platform key. Larger attack surface for no gain.
+- **Run the agent as a shell/root daemon (`uiautomator`/`input` style)** - works, but root on a daily phone and a bigger privileged component.
+- **Fork a Lineage device tree / our own lunch target** - unnecessary: `vendor/extra` gets us in without carrying patches through Lineage updates.
+- **Capture screenshots in the bridge (READ_FRAME_BUFFER / MediaProjection without consent)** - deferred. Accessibility screenshots work at agent speed, and the hidden capture APIs change each Android release. Revisit if screenshot latency or `FLAG_SECURE` handling becomes the bottleneck (and `FLAG_SECURE` capture would need its own page: it is the banking-app privacy line).
+
+## Consequences
+- The same APK works on stock phones (bridge absent: pure accessibility) and MOS ROM phones (bridge used, accessibility as fallback). The stock-app path stays the fallback product.
+- App builds for ROM phones must be signed with the MOS app key from `MOS_KEYS`; CI's debug-signed APK runs on them but without the bridge.
+- Keys in `MOS_KEYS` are now critical assets (see `rom/README.md`).
+- The bridge's lock-screen refusal only covers the bridge; accessibility gestures could still touch a lock screen, as before.
+- APEXes are still default-signed; close before friends get phones.
+- Unverified until a build box run: the Java compiles against `lineage-24.0` platform APIs (`InputManager.injectInputEvent`, `INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH`), and the build script end to end.
+- Revisit if Lineage drops `vendor/extra/product.mk`, or if on-device evals show the bridge doesn't beat accessibility (then it isn't worth the ROM).

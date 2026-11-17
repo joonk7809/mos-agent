@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- MOS ROM only: the privileged input bridge (rom/vendor-extra/MosBridge). Granted only
+         when this APK is signed with the MOS app key the ROM pins; elsewhere it's ignored. -->
+    <uses-permission android:name="dev.mos.permission.BRIDGE" />
 
     <!-- Lets the agent list and launch apps by name (package visibility, Android 11+). -->
     <queries>
@@ -9,6 +12,7 @@
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <package android:name="dev.mos.bridge" />
     </queries>
 
     <!-- Cleartext is allowed because the server is reached over Tailscale/WireGuard,

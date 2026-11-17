@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="dev.mos.bridge">
+
+    <!-- Only apps signed with the MOS app key may bind the bridge. The key's SHA-256
+         digest is written into res/values/known_certs.xml by rom/build.sh. -->
+    <permission
+        android:name="dev.mos.permission.BRIDGE"
+        android:protectionLevel="signature|knownSigner"
+        android:knownCerts="@array/mos_known_certs"
+        android:label="Control this phone through the MOS bridge" />
+
+    <uses-permission android:name="android.permission.INJECT_EVENTS" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" />
+
+    <application
+        android:label="MOS bridge"
+        android:allowBackup="false"
+        android:directBootAware="false">
+
+        <service
+            android:name=".BridgeService"
+            android:exported="true"
+            android:permission="dev.mos.permission.BRIDGE">
+            <intent-filter>
+                <action android:name="dev.mos.bridge.BIND" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

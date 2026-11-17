@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<config>
+    <!-- Exempt the MOS agent app from Doze and app standby while it runs a task. -->
+    <allow-in-power-save package="dev.mos.agent" />
+</config>
