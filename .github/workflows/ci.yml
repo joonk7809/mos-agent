@@ -46,7 +46,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew --no-daemon :core:test :app:assembleDebug
+      # The bridge builds against the public SDK for the emulator quick path; the digest is a dummy.
+      - run: ./gradlew --no-daemon :core:test :app:assembleDebug :bridge:assembleRelease -Pmos.appCertSha256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       - uses: actions/upload-artifact@v4
         with:
           name: mos-debug-apk

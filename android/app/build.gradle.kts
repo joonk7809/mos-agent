@@ -28,6 +28,21 @@ android {
             keyPassword = pass
         }
     }
+    // Emulator ROM images (rom/build.sh sdk_phone_*) preinstall a debug app for the eval driver.
+    // It is signed with a separate emulator-only key (MOS_DEBUG_KEYSTORE), never the phone key:
+    // a debuggable app signed with the phone key could replace the app on a real MOS phone.
+    val mosDebugKeystore = System.getenv("MOS_DEBUG_KEYSTORE")
+    if (mosDebugKeystore != null) {
+        require(mosDebugKeystore != mosKeystore) { "MOS_DEBUG_KEYSTORE must not be the phone key (MOS_KEYSTORE)" }
+        val pass = System.getenv("MOS_DEBUG_KEYSTORE_PASSWORD_FILE")?.let { file(it).readText().trim() }
+            ?: error("MOS_DEBUG_KEYSTORE set without MOS_DEBUG_KEYSTORE_PASSWORD_FILE")
+        signingConfigs.create("mosDebug") {
+            storeFile = file(mosDebugKeystore)
+            storePassword = pass
+            keyAlias = "mos"
+            keyPassword = pass
+        }
+    }
 
     buildFeatures {
         aidl = true // IMosBridge, the ROM's privileged input bridge
@@ -37,6 +52,9 @@ android {
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("mos") ?: signingConfigs.getByName("debug")
+        }
+        debug {
+            signingConfig = signingConfigs.findByName("mosDebug") ?: signingConfigs.getByName("debug")
         }
     }
 

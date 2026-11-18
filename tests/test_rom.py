@@ -203,3 +203,75 @@ def test_bridge_only_drives_labelled_targets_and_checks_version() -> None:
     min_version = int(re.search(r"const val MIN_VERSION = (\d+)", client).group(1))  # type: ignore[union-attr]
     assert bridge_version >= min_version >= 2
     assert "if (version < MIN_VERSION)" in client
+
+
+# ---- emulator paths (rom/emulator/) -------------------------------------------------------
+
+
+def test_gradle_bridge_manifest_matches_the_rom_manifest() -> None:
+    rom = ET.parse(BRIDGE / "AndroidManifest.xml").getroot()
+    gradle = ET.parse(ROOT / "android" / "bridge" / "src" / "main" / "AndroidManifest.xml").getroot()
+    assert gradle.get("package") is None  # AGP takes the namespace from build.gradle.kts
+    rom.attrib.pop("package")
+    assert ET.tostring(rom) == ET.tostring(gradle)
+    gradle_build = (ROOT / "android" / "bridge" / "build.gradle.kts").read_text()
+    assert 'namespace = "dev.mos.bridge"' in gradle_build
+    assert "../../rom/vendor-extra/MosBridge/src" in gradle_build  # one Java source for both builds
+
+
+def test_bridge_source_builds_against_the_public_sdk() -> None:
+    java = (BRIDGE / "src" / "dev" / "mos" / "bridge" / "BridgeService.java").read_text()
+    code = "\n".join(ln for ln in java.splitlines() if not ln.strip().startswith(("*", "/*", "//")))
+    assert "im.injectInputEvent(" not in code and "InputManager.INJECT_INPUT_EVENT_MODE" not in code
+    assert 'getMethod("injectInputEvent"' in java
+    gate = java.split("private int gate() {", 1)[1].split("\n    }\n", 1)[0]
+    assert "INJECT == null) return IMosBridge.REFUSED" in gate  # missing API: fall back, nothing injected
+
+
+def test_install_bridge_script_only_touches_emulators_with_test_keys() -> None:
+    sh = ROM / "emulator" / "install_bridge.sh"
+    subprocess.run(["bash", "-n", str(sh)], check=True)
+    sc = shutil.which("shellcheck")
+    assert sc
+    subprocess.run([sc, "-S", "warning", str(sh)], check=True)
+    text = sh.read_text()
+    assert "ro.kernel.qemu" in text and "never touches real phones" in text
+    assert "framework-res.apk" in text and 'image_digest" != "$testkey_digest"' in text
+
+
+def test_build_script_supports_emulator_images() -> None:
+    sh = (ROM / "build.sh").read_text()
+    assert "sdk_phone_x86_64|sdk_phone_arm64) EMULATOR=1" in sh
+    assert "emu_img_zip" in sh and "sdk-repo-*system-images*.zip" in sh
+    assert "[[ $EMULATOR == 1 ]] && APP_VARIANT=debug" in sh
+
+
+def test_eval_receiver_is_locked_down() -> None:
+    main_manifest = ET.parse(APP / "AndroidManifest.xml").getroot()
+    assert not main_manifest.findall("application/receiver")  # release APKs carry no eval driver
+    assert not (APP / "kotlin" / "dev" / "mos" / "agent" / "EvalReceiver.kt").exists()
+    debug = ROOT / "android" / "app" / "src" / "debug"
+    m = ET.parse(debug / "AndroidManifest.xml").getroot()
+    recv = [r for r in m.findall("application/receiver") if r.get(f"{A}name") == ".EvalReceiver"]
+    assert len(recv) == 1 and recv[0].get(f"{A}permission") == "android.permission.DUMP"
+    kt = (debug / "kotlin" / "dev" / "mos" / "agent" / "EvalReceiver.kt").read_text()
+    assert "return debuggable && isEmulator()" in kt
+    assert 'prop("ro.kernel.qemu") == "1" || prop("ro.boot.qemu") == "1"' in kt
+    assert "FINGERPRINT" not in kt.split("fun isEmulator", 1)[1]
+    assert "if (!allowed(context))" in kt.split("override fun onReceive", 1)[1].split("when", 1)[0]
+    assert 'getStringExtra("token")' not in kt and 'getStringExtra("server")' not in kt
+    loop = (APP / "kotlin" / "dev" / "mos" / "agent" / "AgentLoop.kt").read_text()
+    assert "if (!eval) return service.overlay.confirm(reason)" in loop
+    assert "private val eval: Boolean = false" in loop
+    main = (APP / "kotlin" / "dev" / "mos" / "agent" / "MainActivity.kt").read_text()
+    assert "eval = true" not in main
+
+
+def test_debug_apps_never_get_the_phone_key() -> None:
+    gradle = (ROOT / "android" / "app" / "build.gradle.kts").read_text()
+    debug = gradle.split("        debug {", 1)[1].split("}", 1)[0]
+    assert 'findByName("mosDebug")' in debug and 'findByName("mos")' not in debug
+    sh = (ROM / "build.sh").read_text()
+    assert "[[ $EMULATOR == 1 ]] && APP_KEY_NAME=mos-app-emulator" in sh
+    emu = sh.split("if [[ $EMULATOR == 1 ]]; then\n    ANDROID_HOME", 1)[1].split("else", 1)[0]
+    assert "MOS_DEBUG_KEYSTORE=$APP_KS" in emu and "assembleDebug" in emu

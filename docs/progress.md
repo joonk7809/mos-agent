@@ -2,6 +2,11 @@
 
 Newest first. One entry per working session: what changed, what's verified, what's next, what's broken. Agents read the top few entries before starting (see the `ship` skill). Keep entries to a few lines; details belong in PRs.
 
+## 2026-11-17 - emulator-first MOS (ADR 0010)
+- joon picked the Pixel 7a (pager #6), then asked to work on emulators first. Added `rom/emulator/install_bridge.sh` (bridge as a platform-signed system app on a stock Google APIs emulator, $0), emulator targets in `rom/build.sh` (`sdk_phone_arm64`/`sdk_phone_x86_64`), a Gradle `:bridge` module sharing the ROM's Java (hidden API by reflection), and app-driven evals (`run_evals --driver app --bridge on|off`, EvalReceiver).
+- Unverified here: everything on a device. CI compiles the app and the Gradle bridge.
+- Next: joon runs the quick path and the bridge on/off A/B; then a box build of the emulator ROM.
+
 ## 2026-11-17 - MOS custom ROM (LineageOS) scaffolding
 - joon chose "custom ROM now". Added `rom/`: one-command `rom/build.sh <codename>` for a rented build box (LineageOS 24.0 + TheMuppets blobs + private release keys), `vendor/extra` overlay with MosBridge (platform-signed priv-app: injected taps/swipes/keys/text, enables the agent's accessibility service; knownSigner-pinned to the MOS app key) and the preinstalled agent app. App uses the bridge when present, accessibility otherwise. ADRs 0008, 0009 (Pixel choice paged as #6, recommending 8a).
 - Unverified: nothing here compiles in the cloud container. Java bridge and build script need a build-box run; Kotlin app changes compile in CI.

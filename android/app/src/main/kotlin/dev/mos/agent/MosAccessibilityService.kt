@@ -46,6 +46,9 @@ class MosAccessibilityService : AccessibilityService() {
         private set
     private val executor = Executors.newSingleThreadExecutor()
     private val bridge = BridgeClient(this)
+
+    /** Whether taps/keys can go through the MOS system bridge right now (logged for evals). */
+    val bridgeConnected: Boolean get() = bridge.available
     private var loop: AgentLoop? = null
 
     override fun onServiceConnected() {
@@ -69,9 +72,9 @@ class MosAccessibilityService : AccessibilityService() {
 
     // ---- running tasks -------------------------------------------------------
 
-    fun startTask(task: String, server: String, token: String): Boolean {
+    fun startTask(task: String, server: String, token: String, eval: Boolean = false): Boolean {
         if (loop?.isRunning == true) return false
-        val l = AgentLoop(this, ServerClient(server, token), task)
+        val l = AgentLoop(this, ServerClient(server, token), task, eval)
         loop = l
         Thread(l, "mos-agent").start()
         return true

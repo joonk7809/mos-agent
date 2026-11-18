@@ -13,7 +13,7 @@ android_app {
     },
     resource_dirs: ["res"],
     manifest: "AndroidManifest.xml",
-    platform_apis: true,      // InputManager.injectInputEvent is @hide
+    platform_apis: true,      // build against the platform; @hide calls go through reflection
     certificate: "platform",  // grants INJECT_EVENTS and WRITE_SECURE_SETTINGS
     privileged: true,
     system_ext_specific: true,

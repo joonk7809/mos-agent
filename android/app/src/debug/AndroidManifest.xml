@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: release APKs never contain the eval driver. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- Eval driver for evals/run_evals.py (driver "app"). Only the shell (adb) and the system
+             hold DUMP, and EvalReceiver ignores everything unless this is a debuggable build
+             running on an emulator (ro.kernel.qemu / ro.boot.qemu). -->
+        <receiver
+            android:name=".EvalReceiver"
+            android:exported="true"
+            android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="dev.mos.agent.EVAL_RUN" />
+                <action android:name="dev.mos.agent.EVAL_STOP" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

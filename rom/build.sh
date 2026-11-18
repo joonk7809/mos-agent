@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build a MOS ROM (LineageOS + the MOS bridge and agent app) in one command.
 #
-#   rom/build.sh [DEVICE]            # default DEVICE=akita (Pixel 8a)
-#   rom/build.sh lynx --skip-sync    # rebuild without re-syncing sources
+#   rom/build.sh [DEVICE]            # default DEVICE=lynx (Pixel 7a, ADR 0009)
+#   rom/build.sh akita --skip-sync   # another Pixel; rebuild without re-syncing sources
+#   rom/build.sh sdk_phone_arm64     # emulator image (Apple Silicon); sdk_phone_x86_64 for x86 hosts
 #
 # Run it on a rented Linux build box (Ubuntu 22.04 or 24.04, x86_64), from a checkout of
 # this repo. Needs about 400 GB free disk, 32 GB+ RAM (64 GB is comfortable) and
@@ -18,7 +19,7 @@
 #   MOS_FORCE=1     skip the disk/RAM preflight
 set -euo pipefail
 
-DEVICE=akita
+DEVICE=lynx
 SKIP_SYNC=0
 for arg in "$@"; do
   case "$arg" in
@@ -39,6 +40,13 @@ LINEAGE_BRANCH=${LINEAGE_BRANCH:-lineage-24.0}
 MOS_VARIANT=${MOS_VARIANT:-userdebug}
 MOS_JOBS=${MOS_JOBS:-$(nproc)}
 TREE=$MOS_ROM_DIR/lineage
+# Emulator targets: no device blobs; the output is a system image for the Android Emulator.
+EMULATOR=0
+case "$DEVICE" in sdk_phone_x86_64|sdk_phone_arm64) EMULATOR=1 ;; esac
+# Emulator images get a debuggable app so evals/run_evals.py --driver app works on them
+# (EvalReceiver only acts on debuggable builds on emulators). Phones get release builds.
+APP_VARIANT=release
+[[ $EMULATOR == 1 ]] && APP_VARIANT=debug
 SDK=$MOS_ROM_DIR/android-sdk
 # Pinned Android command-line tools (only used to build the agent APK).
 CMDLINE_TOOLS_ZIP=commandlinetools-linux-11076708_latest.zip
@@ -98,7 +106,14 @@ if [[ ! -d .repo ]]; then
 fi
 # Proprietary vendor blobs for the device, from TheMuppets (the usual source for Lineage builds).
 mkdir -p .repo/local_manifests
-cat > .repo/local_manifests/mos.xml <<EOF
+if [[ $EMULATOR == 1 ]]; then
+  cat > .repo/local_manifests/mos.xml <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written by mos-agent rom/build.sh: emulator target, no vendor blobs -->
+<manifest />
+EOF
+else
+  cat > .repo/local_manifests/mos.xml <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Written by mos-agent rom/build.sh -->
 <manifest>
@@ -106,6 +121,7 @@ cat > .repo/local_manifests/mos.xml <<EOF
            remote="github" revision="${LINEAGE_BRANCH}" clone-depth="1" />
 </manifest>
 EOF
+fi
 if [[ $SKIP_SYNC == 0 ]]; then
   log "repo sync (long on first run)"
   repo sync -c -j"$MOS_JOBS" --force-sync --no-clone-bundle --no-tags --optimized-fetch --prune
@@ -158,10 +174,14 @@ filegroup(
 )
 EOF
 
-APP_KS=$MOS_KEYS/mos-app.jks
-APP_PASS_FILE=$MOS_KEYS/mos-app.pass
+# Phones and emulator images use different app keys: emulator images carry a debuggable app
+# (for the eval driver), which must never be installable over the app on a real MOS phone.
+APP_KEY_NAME=mos-app
+[[ $EMULATOR == 1 ]] && APP_KEY_NAME=mos-app-emulator
+APP_KS=$MOS_KEYS/$APP_KEY_NAME.jks
+APP_PASS_FILE=$MOS_KEYS/$APP_KEY_NAME.pass
 if [[ ! -f $APP_KS ]]; then
-  log "generating the MOS app signing key (first run only)"
+  log "generating the $APP_KEY_NAME signing key (first run only)"
   (umask 077; openssl rand -hex 24 > "$APP_PASS_FILE")
   keytool -genkeypair -keystore "$APP_KS" -storetype PKCS12 -alias mos -keyalg RSA -keysize 4096 \
     -validity 10000 -dname "CN=MOS app, O=MOS" \
@@ -185,10 +205,15 @@ fi
 "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "platforms;android-35" "build-tools;35.0.0" >/dev/null
 (
   cd "$REPO_ROOT/android"
-  ANDROID_HOME=$SDK MOS_KEYSTORE=$APP_KS MOS_KEYSTORE_PASSWORD_FILE=$APP_PASS_FILE \
-    ./gradlew --no-daemon -q :app:assembleRelease
+  if [[ $EMULATOR == 1 ]]; then
+    ANDROID_HOME=$SDK MOS_DEBUG_KEYSTORE=$APP_KS MOS_DEBUG_KEYSTORE_PASSWORD_FILE=$APP_PASS_FILE \
+      ./gradlew --no-daemon -q :app:assembleDebug
+  else
+    ANDROID_HOME=$SDK MOS_KEYSTORE=$APP_KS MOS_KEYSTORE_PASSWORD_FILE=$APP_PASS_FILE \
+      ./gradlew --no-daemon -q :app:assembleRelease
+  fi
 )
-APK=$REPO_ROOT/android/app/build/outputs/apk/release/app-release.apk
+APK=$REPO_ROOT/android/app/build/outputs/apk/$APP_VARIANT/app-$APP_VARIANT.apk
 [[ -f $APK ]] || { echo "app build produced no $APK" >&2; exit 1; }
 "$SDK/build-tools/35.0.0/apksigner" verify "$APK"
 
@@ -210,7 +235,11 @@ export USE_CCACHE=1 CCACHE_EXEC=/usr/bin/ccache CCACHE_DIR=$MOS_ROM_DIR/ccache
 ccache -M 50G >/dev/null
 touch "$MOS_ROM_DIR/.build-start"
 set +eu +o pipefail
-m -j"$MOS_JOBS" bacon
+if [[ $EMULATOR == 1 ]]; then
+  m -j"$MOS_JOBS" && m -j"$MOS_JOBS" emu_img_zip
+else
+  m -j"$MOS_JOBS" bacon
+fi
 rc=$?
 OUT_DIR=$ANDROID_PRODUCT_OUT
 set -eu -o pipefail
@@ -221,8 +250,10 @@ DEST=$MOS_ROM_DIR/out/$DEVICE-$(date -u +%Y%m%d-%H%M)
 mkdir -p "$DEST"
 # Newest zip by mtime. bacon hard-links it to the OTA package, so an unchanged rebuild can
 # leave an older mtime: warn rather than fail.
-zip_path=$(find "$OUT_DIR" -maxdepth 1 -name 'lineage-*.zip' -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
-[[ -n "$zip_path" ]] || { echo "no lineage-*.zip in $OUT_DIR" >&2; exit 1; }
+zip_glob='lineage-*.zip'
+[[ $EMULATOR == 1 ]] && zip_glob='sdk-repo-*system-images*.zip'
+zip_path=$(find "$OUT_DIR" -maxdepth 1 -name "$zip_glob" -printf '%T@ %p\n' | sort -n | tail -1 | cut -d' ' -f2-)
+[[ -n "$zip_path" ]] || { echo "no $zip_glob in $OUT_DIR" >&2; exit 1; }
 if [[ ! "$zip_path" -nt "$MOS_ROM_DIR/.build-start" ]]; then
   echo "warning: $zip_path predates this build (nothing changed?); copying it anyway" >&2
 fi
@@ -230,14 +261,21 @@ cp "$zip_path" "$DEST/"
 for img in boot dtbo init_boot vendor_boot vendor_kernel_boot recovery; do
   [[ -f $OUT_DIR/$img.img ]] && cp "$OUT_DIR/$img.img" "$DEST/"
 done
-cp "$APK" "$DEST/MosAgent.apk"
+if [[ $EMULATOR == 1 ]]; then
+  cp "$APK" "$DEST/MosAgent-emulator-debug.apk"  # emulator key: won't install over a phone's app
+else
+  cp "$APK" "$DEST/MosAgent.apk"
+fi
 (cd "$DEST" && sha256sum -- * > SHA256SUMS)
 
 log "done: $DEST"
 ls -lh "$DEST"
+if [[ $EMULATOR == 1 ]]; then
+  echo "Emulator image: run it with rom/emulator/README.md (\"Full path\")."
+fi
 cat <<EOF
 
-Next: flash it (rom/README.md, "Flashing"). Back up $MOS_KEYS somewhere safe and private
+Phone builds: flash with rom/README.md ("Flashing"). Back up $MOS_KEYS somewhere safe and private
 NOW, then delete it from this box (or destroy the box): without those keys you can't update
 a flashed phone without wiping it, and anyone with them can sign system apps for your phones.
 EOF

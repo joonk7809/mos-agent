@@ -35,4 +35,5 @@ include(":core")
 // `-Pmos.coreOnly` builds and tests just the pure-Kotlin core (no Android SDK needed).
 if (!providers.gradleProperty("mos.coreOnly").isPresent) {
     include(":app")
+    include(":bridge") // emulator quick path; the ROM builds the bridge with Soong
 }

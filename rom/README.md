@@ -5,7 +5,9 @@ LineageOS for a Pixel, plus two MOS pieces:
 - **MosBridge** (`vendor-extra/MosBridge`): a small platform-signed system app. It injects real touch and key events (`INJECT_EVENTS`) and, when you tap the app's button, switches on the agent's accessibility service (`WRITE_SECURE_SETTINGS`). Only `dev.mos.agent` signed with the MOS app key may use it. It refuses to inject while the phone is locked or while a permission prompt or app installer is in front, and it reports "may have partly happened" instead of letting the app retry an action another way.
 - **MosAgent** (`vendor-extra/MosAgent`): the normal MOS app from `android/`, preinstalled and signed with the MOS app key. It uses the bridge for taps, swipes, keys and text when the bridge is there, and accessibility for everything else (screenshots, UI tree) and as a fallback.
 
-Why it is built this way: [ADR 0008](../docs/decisions/0008-lineageos-rom-with-privileged-bridge.md). Which Pixel: [ADR 0009](../docs/decisions/0009-first-rom-device.md).
+Why it is built this way: [ADR 0008](../docs/decisions/0008-lineageos-rom-with-privileged-bridge.md). Which Pixel: [ADR 0009](../docs/decisions/0009-first-rom-device.md) (Pixel 7a, `lynx`).
+
+**No phone yet?** Start on the Android Emulator: [emulator/README.md](emulator/README.md) ([ADR 0010](../docs/decisions/0010-emulator-first.md)).
 
 What you give up on this phone: Play Integrity fails, so banking, wallet/tap-to-pay and some streaming apps won't work. Google apps aren't included (LineageOS ships without them).
 
@@ -13,7 +15,7 @@ What you give up on this phone: Play Integrity fails, so banking, wallet/tap-to-
 
 ```bash
 git clone https://github.com/joonk7809/mos-agent && cd mos-agent
-rom/build.sh akita          # Pixel 8a. Other codenames: lynx (7a), tegu (9a), shiba (8), ...
+rom/build.sh lynx           # Pixel 7a. Others: akita (8a), tegu (9a); sdk_phone_arm64 for the emulator
 ```
 
 The box: Ubuntu 22.04/24.04 x86_64, **16+ cores, 32 GB+ RAM (64 GB comfortable), ~400 GB disk**. The cloud container this repo is developed in can't do this (no `dl.google.com`, too small). Any hourly VM works; pick one with a persistent disk so later builds reuse the source tree and ccache.

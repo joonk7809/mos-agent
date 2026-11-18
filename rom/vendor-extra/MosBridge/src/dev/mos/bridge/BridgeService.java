@@ -22,6 +22,7 @@ import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 
@@ -164,8 +165,28 @@ public final class BridgeService extends Service {
         return km == null || km.isKeyguardLocked() || km.isDeviceLocked();
     }
 
-    /** LOCKED / BLOCKED if input must not be injected now, else OK. */
+    /**
+     * InputManager.injectInputEvent(InputEvent, int) is @hide. It's called by reflection so
+     * the same source builds in the ROM (Soong, platform APIs) and with Gradle against the
+     * public SDK (the emulator quick path, rom/emulator/). Platform-signed system apps are
+     * exempt from hidden-API restrictions in both cases.
+     */
+    private static final Method INJECT = findInject();
+    /** InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH (@hide). */
+    private static final int INJECT_MODE_WAIT_FOR_FINISH = 2;
+
+    private static Method findInject() {
+        try {
+            return InputManager.class.getMethod("injectInputEvent", InputEvent.class, int.class);
+        } catch (NoSuchMethodException e) {
+            Log.e(TAG, "no InputManager.injectInputEvent on this build; bridge refuses all input", e);
+            return null;
+        }
+    }
+
+    /** REFUSED / LOCKED / BLOCKED if input must not be injected now, else OK. */
     private int gate() {
+        if (INJECT == null) return IMosBridge.REFUSED; // nothing injected: the app falls back
         if (locked()) return IMosBridge.LOCKED;
         if (sensitiveScreenUp()) return IMosBridge.BLOCKED;
         return IMosBridge.OK;
@@ -275,7 +296,12 @@ public final class BridgeService extends Service {
 
     private boolean inject(InputEvent ev) {
         InputManager im = getSystemService(InputManager.class);
-        return im.injectInputEvent(ev, InputManager.INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH);
+        try {
+            return (Boolean) INJECT.invoke(im, ev, INJECT_MODE_WAIT_FOR_FINISH);
+        } catch (ReflectiveOperationException e) {
+            Log.w(TAG, "injectInputEvent failed", e);
+            return false;
+        }
     }
 
     private boolean doEnableAccessibility() {
