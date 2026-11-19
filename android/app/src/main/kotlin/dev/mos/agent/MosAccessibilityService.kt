@@ -190,10 +190,16 @@ class MosAccessibilityService : AccessibilityService() {
      * can't judge what it can't see, so Android's own shield must stay in place.
      */
     private fun move(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long) {
-        val done = labelledTargetAt(x1, y1) && viaBridge("touch") {
-            if (x1 == x2 && y1 == y2) it.tap(x1, y1, ms) else it.swipe(x1, y1, x2, y2, ms)
+        // The overlay is invisible to the model, so its touches must go to the app underneath.
+        val passThrough = overlay.beginPassThroughIfHit(x1, y1)
+        try {
+            val done = labelledTargetAt(x1, y1) && viaBridge("touch") {
+                if (x1 == x2 && y1 == y2) it.tap(x1, y1, ms) else it.swipe(x1, y1, x2, y2, ms)
+            }
+            if (!done) gesture(stroke(x1, y1, x2, y2, ms))
+        } finally {
+            if (passThrough) overlay.endPassThrough()
         }
-        if (!done) gesture(stroke(x1, y1, x2, y2, ms))
     }
 
     /** Whether the smallest visible node under (x, y) carries a label itself or via its children. */
