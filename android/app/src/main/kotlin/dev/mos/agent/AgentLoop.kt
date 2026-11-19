@@ -40,6 +40,7 @@ class AgentLoop(
             val session = client.start(task, service.launcherApps(), w, h)
             var reply: String? = null
             var declined = false
+            var lastAnswer: String? = null
             while (!stopped) {
                 val shot = service.captureScreenB64()
                 val r = client.step(session, shot, service.dumpElements(), reply, declined)
@@ -47,7 +48,7 @@ class AgentLoop(
                 declined = false
                 if (r.done) {
                     status = r.status
-                    overlay.finished(doneText(r.status))
+                    overlay.finished(if (r.status == "answered" && lastAnswer != null) "Answer: $lastAnswer" else doneText(r.status))
                     return
                 }
                 val a = r.action ?: continue
@@ -60,7 +61,7 @@ class AgentLoop(
                 if (stopped) break
                 when (a) {
                     is DeviceAction.AskUser -> reply = if (eval) EVAL_REPLY else overlay.ask(a.text)
-                    is DeviceAction.Answer -> overlay.status("Answer: ${a.text}")
+                    is DeviceAction.Answer -> { lastAnswer = a.text; overlay.status("Answer: ${a.text}") }
                     else -> {
                         try {
                             service.execute(a)

@@ -68,7 +68,7 @@ class StepResponse(BaseModel):
     thinking: str = ""
     confirm: str | None = None    # if set, ask the user before executing `action`
     done: bool = False
-    status: str = "running"       # running | success | fail | stopped | max_steps | stuck | error
+    status: str = "running"       # running | success | fail | answered | stopped | max_steps | stuck | error
     step: int = 0
 
 
@@ -215,15 +215,13 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
         s.steps.append(maiui.Step(png=png, thinking=thinking, args=args))
         if (getattr(pol, "REPEATED_ANSWER_ENDS", False) and args.get("action") == "answer"
                 and prev.get("action") == "answer" and prev.get("text") == args.get("text")):
-            # The model's report hasn't changed after seeing a fresh screen: it considers the
-            # task done. Scored as its own claim; evals still judge by device state.
-            # Logged as the terminate it stands for, so SFT exports teach the official ending;
-            # what the model actually emitted stays in model_args.
-            log(s, {"step": n, "raw": raw, "args": {"action": "terminate", "status": "success"},
-                    "model_args": args, "event": "repeated_answer_ends_task",
+            # The model's report hasn't changed after seeing a fresh screen: it is finished. Its
+            # answer may report success or failure, so this is "answered", not a success claim
+            # (evals judge by device state; SFT export keeps only "success" sessions).
+            log(s, {"step": n, "raw": raw, "args": args, "event": "repeated_answer_ends_task",
                     "latency_s": round(time.time() - t0, 2)})
-            finish(s, "success")
-            return StepResponse(done=True, status="success", thinking=thinking, step=n)
+            finish(s, "answered")
+            return StepResponse(done=True, status="answered", thinking=thinking, step=n)
         s.guard.acted(args)
         confirm = safety.needs_confirmation(action, req.elements)
         done = action["type"] == "terminate"

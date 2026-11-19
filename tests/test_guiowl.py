@@ -235,9 +235,9 @@ def test_maiui_repeating_the_same_answer_ends_the_task(tmp_path):
     r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
     assert r["action"]["type"] == "answer" and not r["done"]
     r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
-    assert r["done"] and r["status"] == "success" and r["action"] is None and len(llm.calls) == 2
+    assert r["done"] and r["status"] == "answered" and r["action"] is None and len(llm.calls) == 2
     final = json.loads((tmp_path / sid / "final.json").read_text())
-    assert final["status"] == "success"
+    assert final["status"] == "answered"
 
 
 def test_maiui_different_answers_do_not_end_the_task(tmp_path):
@@ -250,12 +250,15 @@ def test_maiui_different_answers_do_not_end_the_task(tmp_path):
     assert statuses == ["running", "running", "fail"]
 
 
-def test_repeated_answer_exports_as_terminate(tmp_path):
+def test_repeated_failure_answer_is_not_exported_as_success(tmp_path):
     from mos.export_sft import session_samples
     from tests.test_fnf import resp
-    done = {"action": "answer", "text": "Done."}
-    c, sid = _client(tmp_path, ScriptedLLM([resp(done), resp(done)]), policy="maiui")
+    nope = {"action": "answer", "text": "I could not find a contact named Bob."}
+    c, sid = _client(tmp_path, ScriptedLLM([resp(nope), resp(nope)]), policy="maiui")
     for _ in range(2):
-        c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG})
+        r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
+    assert r["status"] == "answered"
+    final = json.loads((tmp_path / sid / "final.json").read_text())
+    assert final["status"] != "success"  # export_sft's default success-only filter drops it
     last = session_samples(tmp_path / sid)[-1]["messages"][-1]["content"]
-    assert '"terminate"' in last and '"success"' in last
+    assert '"answer"' in last and '"terminate"' not in last  # never rewritten into a success claim
