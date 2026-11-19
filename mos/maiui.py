@@ -175,7 +175,9 @@ class ChatClient:
     def complete(self, messages: list[dict], overrides: dict | None = None) -> str:
         body = json.dumps({"model": self.model, "messages": messages, **self.params, **(overrides or {})}).encode()
         req = urllib.request.Request(self.base_url.rstrip("/") + "/chat/completions", data=body, headers={
-            "Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"})
+            "Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}",
+            # Hosted proxies (RunPod's, Cloudflare) answer 403 to Python's default User-Agent.
+            "User-Agent": "mos-server"})
         with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
             return json.loads(r.read())["choices"][0]["message"]["content"]
 
