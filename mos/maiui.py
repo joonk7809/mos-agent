@@ -22,6 +22,10 @@ NAME = "maiui"
 HISTORY_N = 3
 SAMPLING = {"max_tokens": 2048, "temperature": 0.0, "top_p": 1.0}  # the official agent's settings
 ANSWER_ENDS = False  # MAI-UI ends with terminate; answer is an intermediate report
+# MAI-UI-8B often reports completion with `answer` and then repeats the same answer instead of
+# calling terminate (seen in the 2026-11-19 emulator A/B: nearly every run hit max_steps that way).
+# The same answer twice in a row ends the task as the model's success.
+REPEATED_ANSWER_ENDS = True
 SCALE = 999
 RETRY_TEMPERATURE = 0.7
 

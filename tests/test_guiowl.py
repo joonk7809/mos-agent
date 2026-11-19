@@ -224,3 +224,38 @@ def test_export_keeps_each_policys_sessions_apart(tmp_path, monkeypatch):
 def test_last_tool_call_wins():
     raw = owl({"action": "wait"}) + "\n<tool_call>\n" + json.dumps({"name": "mobile_use", "arguments": {"action": "open", "text": "Clock"}}) + "\n</tool_call>"
     assert guiowl.parse_response(raw)[1] == {"action": "open", "text": "Clock"}
+
+
+def test_maiui_repeating_the_same_answer_ends_the_task(tmp_path):
+    # MAI-UI-8B often reports "Done" with answer and repeats it instead of calling terminate.
+    from tests.test_fnf import resp
+    done = {"action": "answer", "text": "Done. Dark theme is on."}
+    llm = ScriptedLLM([resp(done), resp(done), resp({"action": "click", "coordinate": [1, 1]})])
+    c, sid = _client(tmp_path, llm, policy="maiui")
+    r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
+    assert r["action"]["type"] == "answer" and not r["done"]
+    r = c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()
+    assert r["done"] and r["status"] == "success" and r["action"] is None and len(llm.calls) == 2
+    final = json.loads((tmp_path / sid / "final.json").read_text())
+    assert final["status"] == "success"
+
+
+def test_maiui_different_answers_do_not_end_the_task(tmp_path):
+    from tests.test_fnf import resp
+    llm = ScriptedLLM([resp({"action": "answer", "text": "Found 3 alarms"}),
+                       resp({"action": "answer", "text": "Deleted one"}),
+                       resp({"action": "terminate", "status": "fail"})])
+    c, sid = _client(tmp_path, llm, policy="maiui")
+    statuses = [c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG}).json()["status"] for _ in range(3)]
+    assert statuses == ["running", "running", "fail"]
+
+
+def test_repeated_answer_exports_as_terminate(tmp_path):
+    from mos.export_sft import session_samples
+    from tests.test_fnf import resp
+    done = {"action": "answer", "text": "Done."}
+    c, sid = _client(tmp_path, ScriptedLLM([resp(done), resp(done)]), policy="maiui")
+    for _ in range(2):
+        c.post(f"/v1/sessions/{sid}/step", json={"screenshot_b64": PNG})
+    last = session_samples(tmp_path / sid)[-1]["messages"][-1]["content"]
+    assert '"terminate"' in last and '"success"' in last

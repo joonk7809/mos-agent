@@ -211,7 +211,19 @@ def create_app(llm=None, run_root: Path | None = None, token: str | None = None,
             log(s, {"step": n, "error": str(e)})
             finish(s, "error")
             return StepResponse(done=True, status="error", thinking=str(e), step=n)
+        prev = s.steps[-1].args if s.steps else {}
         s.steps.append(maiui.Step(png=png, thinking=thinking, args=args))
+        if (getattr(pol, "REPEATED_ANSWER_ENDS", False) and args.get("action") == "answer"
+                and prev.get("action") == "answer" and prev.get("text") == args.get("text")):
+            # The model's report hasn't changed after seeing a fresh screen: it considers the
+            # task done. Scored as its own claim; evals still judge by device state.
+            # Logged as the terminate it stands for, so SFT exports teach the official ending;
+            # what the model actually emitted stays in model_args.
+            log(s, {"step": n, "raw": raw, "args": {"action": "terminate", "status": "success"},
+                    "model_args": args, "event": "repeated_answer_ends_task",
+                    "latency_s": round(time.time() - t0, 2)})
+            finish(s, "success")
+            return StepResponse(done=True, status="success", thinking=thinking, step=n)
         s.guard.acted(args)
         confirm = safety.needs_confirmation(action, req.elements)
         done = action["type"] == "terminate"
