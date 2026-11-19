@@ -95,13 +95,13 @@ class Overlay(private val service: MosAccessibilityService) {
     }
 
     /**
-     * If a stroke from (x1, y1) to (x2, y2) would touch the panel, let touches fall through it
+     * If a stroke starting at (x, y) would land on the panel, let touches fall through it
      * and return true; the caller must then call [endPassThrough]. The panel is hidden from
      * screenshots, so the model can't know it's there; without this, taps aimed at the top of
      * the screen land on Stop instead. Strokes clear of the panel leave it touchable, so a
      * human Stop is only lost while a stroke actually crosses the panel.
      */
-    fun beginPassThroughIfHit(x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
+    fun beginPassThroughIfHit(x: Int, y: Int): Boolean {
         val latch = CountDownLatch(1)
         val hit = AtomicBoolean(false)
         main.post {
@@ -111,9 +111,8 @@ class Overlay(private val service: MosAccessibilityService) {
                 val loc = IntArray(2)
                 v.getLocationOnScreen(loc)
                 val r = Rect(loc[0], loc[1], loc[0] + v.width, loc[1] + v.height)
-                hit.set((0..STROKE_SAMPLES).any { i ->
-                    r.contains(x1 + (x2 - x1) * i / STROKE_SAMPLES, y1 + (y2 - y1) * i / STROKE_SAMPLES)
-                })
+                // A stroke's target window is fixed at touch-down, so only the start point matters.
+                hit.set(r.contains(x, y))
                 if (hit.get()) {
                     p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                     wm.updateViewLayout(v, p)
@@ -192,10 +191,5 @@ class Overlay(private val service: MosAccessibilityService) {
         for ((label, onClick) in items) {
             buttons.addView(Button(service).apply { text = label; setOnClickListener { onClick() } })
         }
-    }
-
-    private companion object {
-        /** Points checked along a swipe or drag; panel is ~200 px tall, so 32 steps can't skip it. */
-        const val STROKE_SAMPLES = 32
     }
 }

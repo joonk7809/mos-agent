@@ -3,7 +3,7 @@
 Newest first. One entry per working session: what changed, what's verified, what's next, what's broken. Agents read the top few entries before starting (see the `ship` skill). Keep entries to a few lines; details belong in PRs.
 
 ## 2026-11-18 - overlay no longer eats agent taps
-- The MAI-UI run on the emulator ended 15 of 54 runs "stopped": the panel is hidden in screenshots but stayed touchable, so taps aimed at the top of the screen hit Stop. The panel now passes touches through only while an agent stroke that touches it runs (FLAG_NOT_TOUCHABLE), and is hidden for screenshots with alpha instead of INVISIBLE so a Stop pressed during a screenshot isn't swallowed.
+- The MAI-UI run on the emulator ended 15 of 54 runs "stopped": the panel is hidden in screenshots but stayed touchable, so taps aimed at the top of the screen hit Stop. The panel now passes touches through only while an agent stroke that starts on it runs (FLAG_NOT_TOUCHABLE), and is hidden for screenshots with alpha instead of INVISIBLE so a Stop pressed during a screenshot isn't swallowed.
 - Also fixed: starting a task while a finished task's panel (with Close) was still up left the new task with no Stop button. Close now removes the panel at once, so it can't remove a new task's panel.
 - Verified on the emulator with a scripted model that taps the Stop button's position, and with an injected human tap on Stop, bridge on and off (numbers in the PR).
 
