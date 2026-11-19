@@ -191,14 +191,14 @@ class MosAccessibilityService : AccessibilityService() {
      */
     private fun move(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long) {
         // The overlay is invisible to the model, so its touches must go to the app underneath.
-        overlay.setPassThroughBlocking(true)
+        val passThrough = overlay.beginPassThroughIfHit(x1, y1, x2, y2)
         try {
             val done = labelledTargetAt(x1, y1) && viaBridge("touch") {
                 if (x1 == x2 && y1 == y2) it.tap(x1, y1, ms) else it.swipe(x1, y1, x2, y2, ms)
             }
             if (!done) gesture(stroke(x1, y1, x2, y2, ms))
         } finally {
-            overlay.setPassThroughBlocking(false)
+            if (passThrough) overlay.endPassThrough()
         }
     }
 

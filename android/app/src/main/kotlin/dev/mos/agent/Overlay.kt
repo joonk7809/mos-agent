@@ -3,6 +3,7 @@ package dev.mos.agent
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
@@ -15,6 +16,7 @@ import android.widget.TextView
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * A small panel at the top of the screen while a task runs: what the agent is doing,
@@ -67,42 +69,72 @@ class Overlay(private val service: MosAccessibilityService) {
         wm.addView(root, params)
     }
 
-    fun remove() = main.post {
+    fun remove() {
+        // Close taps run on the main thread: remove right away, so a show() queued behind
+        // the tap (a new task starting) still gets a panel instead of having it removed.
+        if (Looper.myLooper() == Looper.getMainLooper()) removeNow() else main.post { removeNow() }
+    }
+
+    private fun removeNow() {
         root?.let { wm.removeView(it) }
         root = null
     }
 
     fun status(text: String) = main.post { if (root != null) statusView.text = text }
 
-    /** Hide during screenshots so the panel isn't part of what the model sees. */
+    /**
+     * Hide during screenshots so the panel isn't part of what the model sees. Uses alpha, not
+     * visibility: an INVISIBLE panel swallows taps without delivering them, so a Stop pressed
+     * while a screenshot is taken would be lost.
+     */
     fun setHiddenBlocking(hidden: Boolean) {
         val latch = CountDownLatch(1)
-        main.post { root?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE; latch.countDown() }
+        main.post { root?.alpha = if (hidden) 0f else 1f; latch.countDown() }
         latch.await(1, TimeUnit.SECONDS)
         if (hidden) Thread.sleep(120) // let the frame without the panel reach the screen
     }
 
     /**
-     * Let touches fall through the panel while the agent's own gesture runs. The panel is
-     * hidden from screenshots, so the model can't know it's there; without this, taps aimed
-     * at the top of the screen (status bar, toolbars, search boxes) land on Stop instead.
-     * Touch is restored right after each gesture, so Stop still works between actions.
+     * If a stroke from (x1, y1) to (x2, y2) would touch the panel, let touches fall through it
+     * and return true; the caller must then call [endPassThrough]. The panel is hidden from
+     * screenshots, so the model can't know it's there; without this, taps aimed at the top of
+     * the screen land on Stop instead. Strokes clear of the panel leave it touchable, so a
+     * human Stop is only lost while a stroke actually crosses the panel.
      */
-    fun setPassThroughBlocking(passThrough: Boolean) {
+    fun beginPassThroughIfHit(x1: Int, y1: Int, x2: Int, y2: Int): Boolean {
         val latch = CountDownLatch(1)
+        val hit = AtomicBoolean(false)
         main.post {
             val p = params
             val v = root
-            if (p != null && v != null) {
-                p.flags = if (passThrough) p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                else p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-                wm.updateViewLayout(v, p)
+            if (p != null && v != null && v.isAttachedToWindow) {
+                val loc = IntArray(2)
+                v.getLocationOnScreen(loc)
+                val r = Rect(loc[0], loc[1], loc[0] + v.width, loc[1] + v.height)
+                hit.set((0..STROKE_SAMPLES).any { i ->
+                    r.contains(x1 + (x2 - x1) * i / STROKE_SAMPLES, y1 + (y2 - y1) * i / STROKE_SAMPLES)
+                })
+                if (hit.get()) {
+                    p.flags = p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                    wm.updateViewLayout(v, p)
+                }
             }
             latch.countDown()
         }
-        latch.await(1, TimeUnit.SECONDS)
+        // If the main thread is too busy to answer, the post may still set the flag later:
+        // report a hit so the caller always restores touch.
+        if (!latch.await(1, TimeUnit.SECONDS)) return true
         // The flag reaches the input dispatcher on the next layout pass; the touch must not beat it.
-        if (passThrough) Thread.sleep(120)
+        if (hit.get()) Thread.sleep(120)
+        return hit.get()
+    }
+
+    /** Make the panel touchable again after [beginPassThroughIfHit] returned true. */
+    fun endPassThrough() = main.post {
+        val p = params ?: return@post
+        val v = root ?: return@post
+        p.flags = p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+        wm.updateViewLayout(v, p)
     }
 
     /** Ask the user to allow an action. Blocks the agent thread; false if denied or stopped. */
@@ -160,5 +192,10 @@ class Overlay(private val service: MosAccessibilityService) {
         for ((label, onClick) in items) {
             buttons.addView(Button(service).apply { text = label; setOnClickListener { onClick() } })
         }
+    }
+
+    private companion object {
+        /** Points checked along a swipe or drag; panel is ~200 px tall, so 32 steps can't skip it. */
+        const val STROKE_SAMPLES = 32
     }
 }
