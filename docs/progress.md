@@ -2,6 +2,11 @@
 
 Newest first. One entry per working session: what changed, what's verified, what's next, what's broken. Agents read the top few entries before starting (see the `ship` skill). Keep entries to a few lines; details belong in PRs.
 
+## 2026-11-18 - overlay no longer eats agent taps
+- The MAI-UI run on the emulator ended 15 of 54 runs "stopped": the panel is hidden in screenshots but stayed touchable, so taps aimed at the top of the screen hit Stop. The panel now passes touches through while the agent's own gesture runs (FLAG_NOT_TOUCHABLE), and takes them again right after.
+- Also fixed: starting a task while a finished task's panel (with Close) was still up left the new task with no Stop button.
+- Verified on the emulator with a scripted model that taps the Stop button's position, and with an injected human tap on Stop, bridge on and off (numbers in the PR).
+
 ## 2026-11-17 - emulator-first MOS (ADR 0010)
 - joon picked the Pixel 7a (pager #6), then asked to work on emulators first. Added `rom/emulator/install_bridge.sh` (bridge as a platform-signed system app on a stock Google APIs emulator, $0), emulator targets in `rom/build.sh` (`sdk_phone_arm64`/`sdk_phone_x86_64`), a Gradle `:bridge` module sharing the ROM's Java (hidden API by reflection), and app-driven evals (`run_evals --driver app --bridge on|off`, EvalReceiver).
 - Unverified here: everything on a device. CI compiles the app and the Gradle bridge.

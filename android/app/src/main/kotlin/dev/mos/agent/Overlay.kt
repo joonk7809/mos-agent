@@ -33,7 +33,15 @@ class Overlay(private val service: MosAccessibilityService) {
     private val answers = SynchronousQueue<String>()
 
     fun show() = main.post {
-        if (root != null) return@post
+        if (root != null) {
+            // A finished task's panel (with Close) is still up: make it a running panel again,
+            // or the new task would run with no Stop button.
+            statusView.text = "Starting…"
+            input.visibility = View.GONE
+            setFocusable(false)
+            setButtons("Stop" to { service.stopTask(); Unit })
+            return@post
+        }
         val ctx = service
         statusView = TextView(ctx).apply { setTextColor(Color.WHITE); textSize = 14f; text = "Starting…" }
         input = EditText(ctx).apply {
@@ -72,6 +80,29 @@ class Overlay(private val service: MosAccessibilityService) {
         main.post { root?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE; latch.countDown() }
         latch.await(1, TimeUnit.SECONDS)
         if (hidden) Thread.sleep(120) // let the frame without the panel reach the screen
+    }
+
+    /**
+     * Let touches fall through the panel while the agent's own gesture runs. The panel is
+     * hidden from screenshots, so the model can't know it's there; without this, taps aimed
+     * at the top of the screen (status bar, toolbars, search boxes) land on Stop instead.
+     * Touch is restored right after each gesture, so Stop still works between actions.
+     */
+    fun setPassThroughBlocking(passThrough: Boolean) {
+        val latch = CountDownLatch(1)
+        main.post {
+            val p = params
+            val v = root
+            if (p != null && v != null) {
+                p.flags = if (passThrough) p.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                else p.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
+                wm.updateViewLayout(v, p)
+            }
+            latch.countDown()
+        }
+        latch.await(1, TimeUnit.SECONDS)
+        // The flag reaches the input dispatcher on the next layout pass; the touch must not beat it.
+        if (passThrough) Thread.sleep(120)
     }
 
     /** Ask the user to allow an action. Blocks the agent thread; false if denied or stopped. */
