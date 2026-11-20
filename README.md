@@ -67,7 +67,8 @@ until the evals show it helps).
 
 A run ends with `success` or `fail` (the model's own verdict), `stopped` (you said no),
 `stuck` (the same action did nothing three times in a row, or it kept waiting on a
-frozen screen), `max_steps`, or `error`.
+frozen screen), `answered` (MAI-UI repeated the same `answer`; not a success claim, since the
+answer may report a failure), `max_steps`, or `error`.
 
 ## 2. Try it on the emulator first
 
