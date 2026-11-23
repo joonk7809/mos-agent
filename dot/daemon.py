@@ -2,9 +2,10 @@
 
 In:  {"type": "ask", "text": "...", "context": {"app": "...", "window": "..."}}
      {"type": "stop"}            halt before the agent's next action
+     {"type": "reset"}           start a new chat (forget earlier requests and replies)
      {"type": "quit"}
 Out: {"type": "ready"} | {"type": "status", "text"} | {"type": "tool", "name", "args"}
-     {"type": "done", "status", "text"} | {"type": "error", "text"}
+     {"type": "done", "status", "text"} | {"type": "error", "text"} | {"type": "reset"}
 """
 from __future__ import annotations
 
@@ -44,6 +45,12 @@ class Daemon:
             return True
         if kind == "stop":
             self.agent.stop.set()
+        elif kind == "reset":
+            if self.busy():
+                self.emit({"type": "error", "text": "busy: press Stop first"})
+            else:
+                self.agent.reset()
+                self.emit({"type": "reset"})
         elif kind == "quit":
             self.agent.stop.set()
             return False

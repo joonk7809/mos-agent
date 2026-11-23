@@ -509,3 +509,34 @@ def test_check_flags_missing_inkling_even_if_other_models_exist(monkeypatch: Any
     _fake_server(monkeypatch, lambda url, body: {"data": [{"id": "qwen3:8b"}, {"id": "llama3:8b"}]})
     problem = model.OpenAICompatModel(base_url="http://h/v1", model=model.DEFAULT_MODEL).check()
     assert problem is not None and model.DEFAULT_MODEL in problem and "qwen3:8b" in problem
+
+
+def test_follow_ups_see_earlier_turns_and_reset_clears_them(tmp_path: Any) -> None:
+    a, m = agent([reply(content="Paris"), reply(content="About 2.1 million"), reply(content="fresh")], tmp_path)
+    a.run("capital of France?")
+    a.run("population?")
+    second = m.seen[1]
+    assert [x["content"] for x in second if x["role"] in ("user", "assistant")][:3] == \
+        ["capital of France?", "Paris", "population?"]
+    a.reset()
+    a.run("hi")
+    assert [x["role"] for x in m.seen[2]] == ["system", "user"]
+
+
+def test_history_keeps_stopped_tasks_marked_and_is_capped(tmp_path: Any) -> None:
+    a, _ = agent([reply(content=str(i)) for i in range(loop.HISTORY_EXCHANGES + 3)], tmp_path)
+    for i in range(loop.HISTORY_EXCHANGES + 3):
+        a.run(f"q{i}")
+    assert len(a.history) == 2 * loop.HISTORY_EXCHANGES
+    assert a.history[-2]["content"] == f"q{loop.HISTORY_EXCHANGES + 2}"
+    b, _ = agent([reply(call("key", 0, combo="enter"))], tmp_path, on_call=lambda n: b.stop.set())
+    b.run("press enter")
+    assert b.history[-1]["content"].startswith("[stopped]")
+
+
+def test_daemon_reset(tmp_path: Any) -> None:
+    a, _ = agent([], tmp_path)
+    a.history = [{"role": "user", "content": "x"}]
+    out = io.StringIO()
+    daemon.Daemon(a, out).handle('{"type":"reset"}')
+    assert a.history == [] and json.loads(out.getvalue().splitlines()[-1]) == {"type": "reset"}

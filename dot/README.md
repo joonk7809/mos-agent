@@ -1,8 +1,10 @@
 # Dot: a local hotkey agent for the Mac (v0, unbound)
 
-A small black dot sits in the top-right corner. **Control+Space** opens a prompt bar: ask anything, or tell it
-to do something on the Mac. On Enter the bar collapses and focus goes back to your app while the dot (grey)
-works; the answer pops up when it's done. The agent runs locally against Inkling 2 Mini (or any OpenAI-compatible server)
+A small black dot rests in the top-right corner. **Control+Space** slides a small chat card up into the middle of
+the screen: ask anything, or tell it to do something on the Mac, then ask follow-ups (it keeps the conversation;
+right-click the dot > New Chat, or type `/new`, to start over). While it works, the dot turns green and the card
+shows each step but lets clicks through and gives the keyboard back to your app; the answer appears when done.
+Mock-ups (light/dark): `/mnt/project-files/dot-mock/` in the project. The agent runs locally against Inkling 2 Mini (or any OpenAI-compatible server)
 and acts through shell, files, AppleScript, `open`, web fetch and screen control (accessibility elements first,
 screenshots + click/type/scroll/drag as the fallback). Research and design notes:
 https://claude.ai/artifact/952W6ZsVNQ6Q1ro4oSNdkG. Why v0 has no permission gates: `docs/decisions/0011-dot-unbound-v0.md`.
@@ -53,7 +55,8 @@ Model settings for the app (read at launch; quit and reopen Dot after changing):
 `defaults write dev.mos.dot model|modelURL|apiKey|reasoning|maxSide|coords <value>`.
 In a terminal, the `DOT_*` variables below do the same.
 
-**Close and quit.** The hotkey again, Esc, or the ✕ closes the bar back to the dot. To quit Dot, right-click
+**Close and quit.** The hotkey again, Esc, or clicking anywhere else closes the card; an answer you don't
+touch slides away after 45 s. To quit Dot, right-click
 (or Control-click) the dot and choose **Quit Dot**, or run `pkill -x Dot`. If something fails, the bar shows
 the reason (for example "No model server answering at http://127.0.0.1:11434/v1 ... Start it"), and the
 agent's own log is `~/Library/Logs/Dot/daemon.err`.

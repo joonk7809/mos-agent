@@ -26,6 +26,7 @@ MAX_TURNS = 40
 # prunes, so the local server's prefix (KV) cache is reused and each step only reads the new tokens.
 PRUNE_AT = 4           # when this many screenshots are in the history...
 KEEP_SCREENSHOTS = 1   # ...keep only the newest this many
+HISTORY_EXCHANGES = 10  # earlier requests + Dot's final replies kept for follow-ups (tool steps are not kept)
 REPEAT_LIMIT = 3       # the same reply (same calls, same args) this many turns in a row ends the task
 
 SYSTEM = """You are Dot, an assistant that runs locally on the user's Mac and can operate it.
@@ -88,6 +89,11 @@ class Agent:
         self.log = log or ActionLog()
         self.max_turns = max_turns
         self.stop = threading.Event()
+        # The chat so far, as plain user/assistant text. Cleared by reset() ("new chat").
+        self.history: list[dict[str, Any]] = []
+
+    def reset(self) -> None:
+        self.history = []
 
     def run(self, task: str, context: dict[str, Any] | None = None,
             on_event: Callable[[dict[str, Any]], None] = lambda e: None) -> Outcome:
@@ -108,6 +114,7 @@ class Agent:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM.format(today=dt.date.today().isoformat(),
                                                         home=os.path.expanduser("~"))},
+            *self.history,
             {"role": "user", "content": task + (f"\n\n[context]{ctx}" if ctx else "")},
         ]
         self.log.write(tid, "task", text=task, context=context or {})
@@ -115,6 +122,9 @@ class Agent:
 
         def end(status: str, text: str, turns: int) -> Outcome:
             self.log.write(tid, "end", status=status, text=text, turns=turns)
+            note = "" if status == "answered" else f"[{status}] "
+            self.history = (self.history + [{"role": "user", "content": task},
+                                            {"role": "assistant", "content": note + text}])[-2 * HISTORY_EXCHANGES:]
             on_event({"type": "done", "status": status, "text": text})
             return Outcome(status, text, turns)
 
