@@ -88,6 +88,7 @@ def main() -> None:  # pragma: no cover - wiring
         problem = f"Startup check failed: {type(e).__name__}: {e}"
     if problem:  # shown in the bar at launch, so a missing server is obvious before the first ask
         print(json.dumps({"type": "error", "text": problem}), flush=True)
+    print(json.dumps({"type": "status", "text": f"model: {m.model} at {m.base_url}"}), flush=True)
     Daemon(Agent(m, Tools(desktop)), sys.stdout).serve(sys.stdin)
 
 

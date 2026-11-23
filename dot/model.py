@@ -2,7 +2,7 @@
 
 Defaults point at Ollama on localhost running Inkling 2 Mini. Override with:
   DOT_MODEL_URL  base URL ending in /v1     (default http://127.0.0.1:11434/v1)
-  DOT_MODEL      model name                  (default inkling-2-mini)
+  DOT_MODEL      model name                  (default hf.co/ggml-org/Inkling-2-Mini-GGUF:IQ4_NL: the 4-bit build that fits a 24 GB Mac)
   DOT_API_KEY    bearer token, if the server wants one (hosted fallback)
   DOT_REASONING  reasoning_effort to send (default "low": short thinking = fast steps; "" omits it)
   DOT_MAX_TOKENS max output tokens per step (default 2048; caps runaway reasoning)
@@ -16,6 +16,11 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+
+# Inkling 2 Mini, 4-bit GGUF (~15 GB) pulled straight from Hugging Face by Ollama. Dot never switches to
+# another model on its own: if this one isn't on the server, it says so and stops.
+DEFAULT_MODEL = "hf.co/ggml-org/Inkling-2-Mini-GGUF:IQ4_NL"
 
 
 class ModelError(RuntimeError):
@@ -38,6 +43,7 @@ class Reply:
     # The assistant message exactly as it goes back into the history.
     message: dict[str, Any] = field(default_factory=dict)
     usage: dict[str, Any] = field(default_factory=dict)
+    served_model: str = ""  # the model name the server says answered
 
 
 class Model(Protocol):
@@ -86,7 +92,7 @@ class OpenAICompatModel:
     def __init__(self, base_url: str | None = None, model: str | None = None, api_key: str | None = None,
                  max_tokens: int | None = None, timeout: float = 300.0):
         self.base_url = (base_url or os.environ.get("DOT_MODEL_URL") or "http://127.0.0.1:11434/v1").rstrip("/")
-        self.model = model or os.environ.get("DOT_MODEL") or "inkling-2-mini"
+        self.model = model or os.environ.get("DOT_MODEL") or DEFAULT_MODEL
         self.api_key = api_key if api_key is not None else os.environ.get("DOT_API_KEY", "")
         self.reasoning = os.environ.get("DOT_REASONING", "low")
         self.max_tokens = max_tokens or int(os.environ.get("DOT_MAX_TOKENS", "2048"))
@@ -170,6 +176,7 @@ class OpenAICompatModel:
             raise self.explain(e) from e
         reply = parse_message(data["choices"][0]["message"])
         reply.usage = data.get("usage") or {}
+        reply.served_model = str(data.get("model") or "")
         return reply
 
 

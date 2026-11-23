@@ -14,16 +14,45 @@ it's open.)
 Run it on a Mac you're comfortable letting it change.
 
 ## Run it (macOS 14+, Apple silicon)
+
+### 1. Install the model: Inkling 2 Mini, 4-bit
+Dot is built for **Inkling 2 Mini** (Thinking Machines, Nov 2026). The full checkpoint is ~20 GB and needs a
+32 GB Mac. On 24 GB, use the 4-bit GGUF build (~15 GB, my estimate), which is Dot's default model name:
 ```bash
-# 1. Model (local). Inkling 2 Mini is ~20 GB natively; on a 24 GB Mac try the 4-bit GGUF:
-ollama pull inkling-2-mini            # or a 4-bit tag / ggml-org/Inkling-2-Mini-GGUF:IQ4_NL via llama-server
-# 2. Agent deps (screen control)
+brew install ollama            # or the Ollama app from ollama.com
+ollama serve &                 # skip if the Ollama app is running
+ollama pull hf.co/ggml-org/Inkling-2-Mini-GGUF:IQ4_NL
+ollama run hf.co/ggml-org/Inkling-2-Mini-GGUF:IQ4_NL "say hi"   # sanity check; Ctrl+D to exit
+ollama list                    # the name above must be listed exactly
+```
+Dot only ever uses the model it's configured with. If that model isn't on the server, the bar says so (and
+lists what the server does have) instead of quietly using another one. Check which model answered: the bar
+shows `model: ...` at launch, and the action log records `served_model` for every step.
+
+On a 32 GB+ Mac you can use the full build instead: `ollama pull inkling-2-mini`, then
+`defaults write dev.mos.dot model inkling-2-mini`.
+
+If Ollama can't run it yet (looped-model support in local runtimes is new), use llama.cpp's server:
+```bash
+brew install llama.cpp
+llama-server -hf ggml-org/Inkling-2-Mini-GGUF:IQ4_NL --jinja --port 8080 -c 16384
+defaults write dev.mos.dot modelURL http://127.0.0.1:8080/v1
+defaults write dev.mos.dot model ggml-org/Inkling-2-Mini-GGUF:IQ4_NL
+```
+
+### 2. Agent, then the app
+```bash
+# Screen-control dependencies
 python3 -m venv ~/.venvs/dot && ~/.venvs/dot/bin/pip install pyobjc-framework-Quartz pyobjc-framework-ApplicationServices
-# 3. Try the agent in a terminal first
+# Try the agent in a terminal first
 cd mos-agent && ~/.venvs/dot/bin/python -m dot "what's in my Downloads folder?"
-# 4. Build and open the dot
+# Build and open the dot
 dot/mac/build.sh ~/.venvs/dot/bin/python && open dot/mac/build/Dot.app
 ```
+Model settings for the app (read at launch; quit and reopen Dot after changing):
+`defaults write dev.mos.dot model|modelURL|apiKey|reasoning|maxSide|coords <value>`.
+In a terminal, the `DOT_*` variables below do the same.
+
 **Close and quit.** The hotkey again, Esc, or the ✕ closes the bar back to the dot. To quit Dot, right-click
 (or Control-click) the dot and choose **Quit Dot**, or run `pkill -x Dot`. If something fails, the bar shows
 the reason (for example "No model server answering at http://127.0.0.1:11434/v1 ... Start it"), and the
@@ -43,8 +72,8 @@ then quit and reopen Dot. Combos: ctrl/opt/cmd/shift + a letter, digit, space, e
 Grant **Dot** Accessibility and Screen Recording in System Settings > Privacy & Security (macOS prompts on first
 use; Automation prompts appear per app the first time AppleScript drives it).
 
-Settings (environment, or edit `dot/model.py` defaults): `DOT_MODEL_URL` (default Ollama
-`http://127.0.0.1:11434/v1`), `DOT_MODEL` (`inkling-2-mini`), `DOT_API_KEY` (hosted fallback),
+Settings (environment, or `defaults write dev.mos.dot` as above): `DOT_MODEL_URL` (default Ollama
+`http://127.0.0.1:11434/v1`), `DOT_MODEL` (`hf.co/ggml-org/Inkling-2-Mini-GGUF:IQ4_NL`), `DOT_API_KEY` (hosted fallback),
 `DOT_REASONING` (`low`), `DOT_MAX_TOKENS` (2048), `DOT_MAX_SIDE` (screenshot long side, 1280),
 `DOT_COORDS` (`pixels` or `norm1000` if the model emits 0..999), `DOT_LOG_DIR` (`~/Library/Logs/Dot`).
 

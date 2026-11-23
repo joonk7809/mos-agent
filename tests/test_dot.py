@@ -490,3 +490,22 @@ def test_check_ignores_missing_models_route(monkeypatch: Any) -> None:
         raise _http_error(404, "404 page not found")
     _fake_server(monkeypatch, h)
     assert model.OpenAICompatModel(base_url="http://h/v1").check() is None
+
+
+def test_default_model_is_inkling_4bit_and_never_swapped(monkeypatch: Any, tmp_path: Any) -> None:
+    monkeypatch.delenv("DOT_MODEL", raising=False)
+    calls = _fake_server(monkeypatch, lambda url, body: {"model": body["model"],
+                                                         "choices": [{"message": {"content": "hi"}}]})
+    m = model.OpenAICompatModel(base_url="http://h/v1")
+    assert m.model == model.DEFAULT_MODEL == "hf.co/ggml-org/Inkling-2-Mini-GGUF:IQ4_NL"
+    a = loop.Agent(m, Tools(None, run=fake_run), loop.ActionLog(str(tmp_path)))
+    a.run("hello")
+    assert [c["body"]["model"] for c in calls] == [model.DEFAULT_MODEL]
+    rec = [r for r in log_records(tmp_path) if r["kind"] == "model"][0]
+    assert rec["served_model"] == model.DEFAULT_MODEL
+
+
+def test_check_flags_missing_inkling_even_if_other_models_exist(monkeypatch: Any) -> None:
+    _fake_server(monkeypatch, lambda url, body: {"data": [{"id": "qwen3:8b"}, {"id": "llama3:8b"}]})
+    problem = model.OpenAICompatModel(base_url="http://h/v1", model=model.DEFAULT_MODEL).check()
+    assert problem is not None and model.DEFAULT_MODEL in problem and "qwen3:8b" in problem
