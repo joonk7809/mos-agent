@@ -129,6 +129,7 @@ class Agent:
                 msg = str(e) if isinstance(e, ModelError) else f"Model call failed: {type(e).__name__}: {e}"
                 return end("error", msg, turn)
             self.log.write(tid, "model", turn=turn, seconds=round(time.monotonic() - t0, 3), usage=reply.usage,
+                           served_model=reply.served_model,
                            content=reply.content,
                            calls=[{"name": c.name, "args": c.arguments} for c in reply.tool_calls])
             messages.append(reply.message)

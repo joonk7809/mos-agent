@@ -53,6 +53,15 @@ final class Agent {
         let python = env["DOT_PYTHON"] ?? (Bundle.main.object(forInfoDictionaryKey: "DotPython") as? String) ?? "python3"
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         p.arguments = [python, "-m", "dot", "--daemon"]
+        // Apps opened from Finder get no shell environment, so model settings also come from
+        // `defaults write dev.mos.dot <key> <value>` (model, modelURL, apiKey, reasoning, maxSide, coords).
+        var childEnv = env
+        let fromDefaults = ["model": "DOT_MODEL", "modelURL": "DOT_MODEL_URL", "apiKey": "DOT_API_KEY",
+                            "reasoning": "DOT_REASONING", "maxSide": "DOT_MAX_SIDE", "coords": "DOT_COORDS"]
+        for (key, name) in fromDefaults where childEnv[name] == nil {
+            if let v = UserDefaults.standard.string(forKey: key), !v.isEmpty { childEnv[name] = v }
+        }
+        p.environment = childEnv
         p.currentDirectoryURL = URL(fileURLWithPath: repo)
         let inPipe = Pipe(), outPipe = Pipe()
         p.standardInput = inPipe
