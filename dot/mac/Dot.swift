@@ -1,13 +1,14 @@
-// Dot: an always-on black dot in the top-right corner. Control+Space (configurable) opens a prompt bar;
-// the request goes to the local agent (python -m dot --daemon) over stdin/stdout.
-// On submit the bar collapses back to the dot and focus returns to your app, so the agent's typing
-// and clicks land there (and not on Dot). The dot turns grey while running; the answer pops up when done.
-// Close the bar: Esc, the ✕, or the hotkey again. Quit: right-click the dot > Quit Dot.
-// Stop (halts before the agent's next action): Option+Esc anywhere, the open hotkey while running,
-// a click on the grey dot, or Esc/Stop in the bar. Esc when idle = collapse.
+// Dot: a small dot rests in the top-right corner. Control+Space (configurable) slides a small chat card up
+// into the middle of the screen; ask anything or give it a task. The request goes to the local agent
+// (python -m dot --daemon) over stdin/stdout, and the chat keeps context for follow-ups (New Chat resets).
+// While a task runs the card stays visible but lets clicks through and hands the keyboard back to your
+// app, so the agent's typing and clicks land there, never in Dot. The dot turns green while working.
+// Close: Esc, the hotkey, or click elsewhere. Quit: right-click the dot > Quit Dot.
+// Stop (halts before the agent's next action): Option+Esc anywhere, the hotkey or a dot click while running.
 // Build: dot/mac/build.sh  (needs Xcode command line tools: xcode-select --install)
 import AppKit
 import Carbon
+import QuartzCore
 
 final class DotPanel: NSPanel {
     var onEscape: (() -> Void)?
@@ -112,229 +113,432 @@ final class Agent {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
+// MARK: - Look: quiet, monochrome, hairline borders, one accent (light and dark follow the system)
+
+enum Theme {
+    static func dyn(_ light: NSColor, _ dark: NSColor) -> NSColor {
+        NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
+    }
+    static func hex(_ v: UInt32, _ a: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat((v >> 16) & 0xFF) / 255, green: CGFloat((v >> 8) & 0xFF) / 255,
+                blue: CGFloat(v & 0xFF) / 255, alpha: a)
+    }
+    static let surface = dyn(hex(0xFFFFFF), hex(0x161618))
+    static let border = dyn(hex(0x000000, 0.09), hex(0xFFFFFF, 0.09))
+    static let text = dyn(hex(0x0D0D0D), hex(0xECECEE))
+    static let secondary = dyn(hex(0x6E6E80), hex(0x8E8EA0))
+    static let tertiary = dyn(hex(0xA1A1AA), hex(0x5C5C66))
+    static let accent = hex(0x10A37F)  // used only for the "working" pulse
+    static let danger = dyn(hex(0xC4373B), hex(0xF0686B))
+    static let body = NSFont.systemFont(ofSize: 14)
+    static let label = NSFont.systemFont(ofSize: 11.5, weight: .medium)
+    static let mono = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+    static let input = NSFont.systemFont(ofSize: 15)
+}
+
+/// The chat card: rounded, hairline border, soft shadow. Its layer colours follow light/dark mode.
+final class CardView: NSView {
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        layer?.backgroundColor = Theme.surface.cgColor
+        layer?.borderColor = Theme.border.cgColor
+    }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.cornerRadius = 14
+        layer?.borderWidth = 1
+        layer?.masksToBounds = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+final class Hairline: NSView {
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { layer?.backgroundColor = Theme.border.cgColor }
+    override init(frame: NSRect) { super.init(frame: frame); wantsLayer = true }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     static var shared: AppDelegate?
-    let dotSize: CGFloat = 16, margin: CGFloat = 10
-    let barSize = NSSize(width: 460, height: 240)
-    var panel: DotPanel!
+    // Resting state: a small dot in the top-right corner.
+    let dotSize: CGFloat = 12, margin: CGFloat = 12
+    // Chat: a small centred card that slides up from below when summoned.
+    let chatWidth: CGFloat = 580, inputHeight: CGFloat = 54, maxTranscript: CGFloat = 340
+    var dotPanel: DotPanel!
     var dot: DotView!
-    var bar: NSVisualEffectView!
+    var chat: DotPanel!
+    var card: CardView!
+    var transcriptScroll: NSScrollView!
+    var transcript: NSTextView!
+    var divider: Hairline!
     var input: NSTextField!
-    var output: NSTextView!
-    var stopButton: NSButton!
+    var hint: NSTextField!
     let agent = Agent()
-    var expanded = false
+    var shown = false
     var running = false
     var hotKeyRef: EventHotKeyRef?
+    var context: [String: String] = [:]
+    var idleHide: Timer?
+    // While a task runs the card shrinks to a one-line status strip at the bottom of the screen,
+    // so it hides as little as possible of what the agent sees and clicks.
+    var compact: Bool { running }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         AppDelegate.shared = self
         NSApp.setActivationPolicy(.accessory)
         signal(SIGPIPE, SIG_IGN)  // a dead daemon surfaces as a write error, not a crash
-        buildPanel()
+        buildDot()
+        buildChat()
         registerHotKey()
         agent.onEvent = { [weak self] ev in self?.handle(ev) }
         agent.start()
-        collapse()
         if !startupNotes.isEmpty {  // hotkey problems: say so once, without taking the keyboard
-            output.string = startupNotes.map { "⚠︎ " + $0 }.joined(separator: "\n") + "\n"
-            expand(focus: false)
+            startupNotes.forEach { appendNote($0, color: Theme.danger) }
+            show(focus: false)
+            hideLater(60)
         }
     }
 
     func applicationWillTerminate(_ n: Notification) { agent.stopProcess() }
 
-    // MARK: layout
-    func screenFrame() -> NSRect { (NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
+    func screen() -> NSRect { (NSScreen.main ?? NSScreen.screens[0]).visibleFrame }
 
-    func buildPanel() {
-        panel = DotPanel(contentRect: NSRect(x: 0, y: 0, width: dotSize, height: dotSize),
-                         styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.level = .statusBar
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = false
-        panel.hidesOnDeactivate = false
-        panel.isMovableByWindowBackground = false
-        panel.onEscape = { [weak self] in self?.escape() }
+    func makeMenu() -> NSMenu {
+        let m = NSMenu()
+        m.addItem(withTitle: "Open Dot", action: #selector(openChat), keyEquivalent: "").target = self
+        m.addItem(withTitle: "New Chat", action: #selector(newChat), keyEquivalent: "n").target = self
+        m.addItem(.separator())
+        m.addItem(withTitle: "Quit Dot", action: #selector(quit), keyEquivalent: "q").target = self
+        return m
+    }
 
-        let root = NSView(frame: NSRect(origin: .zero, size: barSize))
-        panel.contentView = root
-
-        bar = NSVisualEffectView(frame: root.bounds)
-        bar.material = .hudWindow
-        bar.state = .active
-        bar.wantsLayer = true
-        bar.layer?.cornerRadius = 14
-        bar.autoresizingMask = [.width, .height]
-        root.addSubview(bar)
-
-        input = NSTextField(frame: NSRect(x: 14, y: barSize.height - 46, width: barSize.width - 28 - 70 - 30, height: 30))
-        input.placeholderString = "Ask Dot anything, or tell it what to do"
-        input.font = .systemFont(ofSize: 15)
-        input.bezelStyle = .roundedBezel
-        input.focusRingType = .none
-        input.target = self
-        input.action = #selector(submit)
-        bar.addSubview(input)
-
-        stopButton = NSButton(title: "Stop", target: self, action: #selector(stop))
-        stopButton.frame = NSRect(x: barSize.width - 14 - 62 - 30, y: barSize.height - 46, width: 62, height: 30)
-        stopButton.bezelStyle = .rounded
-        stopButton.isEnabled = false
-        bar.addSubview(stopButton)
-
-        // × closes the bar back to the dot (Esc does the same once you've clicked into it).
-        let close = NSButton(title: "✕", target: self, action: #selector(closeBar))
-        close.frame = NSRect(x: barSize.width - 14 - 26, y: barSize.height - 44, width: 26, height: 26)
-        close.bezelStyle = .inline
-        close.isBordered = false
-        close.toolTip = "Close (Esc). Right-click the dot to quit Dot."
-        bar.addSubview(close)
-
-        // Right-click (or Control-click) the dot or the bar: Open / Close / Quit Dot.
-        let menu = NSMenu()
-        menu.addItem(withTitle: "Open Dot", action: #selector(openBar), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Close", action: #selector(closeBar), keyEquivalent: "").target = self
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Dot", action: #selector(quit), keyEquivalent: "q").target = self
-        bar.menu = menu
-
-        let scroll = NSScrollView(frame: NSRect(x: 14, y: 12, width: barSize.width - 28, height: barSize.height - 66))
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        output = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
-        output.isVerticallyResizable = true
-        output.isHorizontallyResizable = false
-        output.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        output.textContainer?.widthTracksTextView = true
-        output.isEditable = false
-        output.drawsBackground = false
-        output.font = .systemFont(ofSize: 13)
-        output.textColor = .labelColor
-        output.autoresizingMask = [.width]
-        scroll.documentView = output
-        bar.addSubview(scroll)
-
+    // MARK: dot
+    func buildDot() {
+        let s = screen()
+        dotPanel = DotPanel(contentRect: NSRect(x: s.maxX - dotSize - margin, y: s.maxY - dotSize - margin,
+                                                width: dotSize, height: dotSize),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        dotPanel.level = .statusBar
+        dotPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        dotPanel.isOpaque = false
+        dotPanel.backgroundColor = .clear
+        dotPanel.hasShadow = false
         dot = DotView(frame: NSRect(x: 0, y: 0, width: dotSize, height: dotSize))
         dot.onClick = { [weak self] in self?.toggle() }
-        dot.menu = menu
-        root.addSubview(dot)
-        panel.orderFrontRegardless()
+        dot.menu = makeMenu()
+        dotPanel.contentView = dot
+        dotPanel.orderFrontRegardless()
     }
 
-    func releaseKeyboard() {
-        panel.makeFirstResponder(nil)
-        panel.allowKey = false
-        if panel.isKeyWindow { panel.orderOut(nil) }  // ordering out is what really gives up key status
+    // MARK: chat card
+    func label(_ s: String, font: NSFont, color: NSColor) -> NSTextField {
+        let l = NSTextField(labelWithString: s)
+        l.font = font
+        l.textColor = color
+        return l
     }
 
-    func collapse() {
-        releaseKeyboard()
-        expanded = false
-        let s = screenFrame()
-        bar.isHidden = true
-        dot.isHidden = false
-        dot.frame = NSRect(x: 0, y: 0, width: dotSize, height: dotSize)
-        panel.setFrame(NSRect(x: s.maxX - dotSize - margin, y: s.maxY - dotSize - margin,
-                              width: dotSize, height: dotSize), display: true)
-        panel.orderFrontRegardless()
+    func buildChat() {
+        chat = DotPanel(contentRect: NSRect(x: 0, y: 0, width: chatWidth, height: inputHeight),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        chat.level = .floating
+        chat.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        chat.isOpaque = false
+        chat.backgroundColor = .clear
+        chat.hasShadow = true
+        chat.sharingType = .none  // keep Dot out of screenshots (the agent's own included) where macOS honours it
+        chat.hidesOnDeactivate = false
+        chat.delegate = self
+        chat.onEscape = { [weak self] in self?.escape() }
+
+        card = CardView(frame: NSRect(x: 0, y: 0, width: chatWidth, height: inputHeight))
+        card.autoresizingMask = [.width, .height]
+        card.menu = makeMenu()
+        chat.contentView = card
+
+        // Transcript (top). Hidden until there is something to show.
+        transcriptScroll = NSScrollView(frame: .zero)
+        transcriptScroll.hasVerticalScroller = true
+        transcriptScroll.scrollerStyle = .overlay
+        transcriptScroll.drawsBackground = false
+        transcriptScroll.borderType = .noBorder
+        transcript = NSTextView(frame: NSRect(x: 0, y: 0, width: chatWidth - 40, height: 10))
+        transcript.isEditable = false
+        transcript.isSelectable = true
+        transcript.drawsBackground = false
+        transcript.textContainerInset = NSSize(width: 0, height: 14)
+        transcript.isVerticallyResizable = true
+        transcript.isHorizontallyResizable = false
+        transcript.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        transcript.textContainer?.widthTracksTextView = true
+        transcript.autoresizingMask = [.width]
+        transcriptScroll.documentView = transcript
+        card.addSubview(transcriptScroll)
+
+        divider = Hairline(frame: .zero)
+        card.addSubview(divider)
+
+        // Input row (bottom): borderless field + a quiet hint on the right.
+        input = NSTextField(frame: .zero)
+        input.isBordered = false
+        input.drawsBackground = false
+        input.focusRingType = .none
+        input.font = Theme.input
+        input.textColor = Theme.text
+        input.placeholderAttributedString = NSAttributedString(string: "Ask Dot anything…",
+            attributes: [.foregroundColor: Theme.tertiary, .font: Theme.input])
+        input.cell?.usesSingleLineMode = true
+        input.cell?.lineBreakMode = .byTruncatingTail
+        input.target = self
+        input.action = #selector(submit)
+        card.addSubview(input)
+
+        hint = label("↵", font: Theme.label, color: Theme.tertiary)
+        hint.alignment = .right
+        card.addSubview(hint)
+        layoutChat(animated: false)
     }
 
-    var previousApp: NSRunningApplication?
+    var transcriptHeight: CGFloat {
+        guard transcript.textStorage?.length ?? 0 > 0, let lm = transcript.layoutManager,
+              let tc = transcript.textContainer else { return 0 }
+        lm.ensureLayout(for: tc)
+        let h = lm.usedRect(for: tc).height + transcript.textContainerInset.height * 2
+        return min(ceil(h), maxTranscript)
+    }
 
-    func expand(focus: Bool = true) {
-        if focus {
-            previousApp = NSWorkspace.shared.frontmostApplication
-            context = ["app": previousApp?.localizedName ?? ""]
+    /// Card height follows the content; its top edge stays put (a little above the screen's centre).
+    func targetFrame() -> NSRect {
+        let s = screen()
+        if compact {
+            return NSRect(x: (s.midX - chatWidth / 2).rounded(), y: s.minY + 28, width: chatWidth, height: inputHeight)
         }
-        expanded = true
-        let s = screenFrame()
-        panel.setFrame(NSRect(x: s.maxX - barSize.width - margin, y: s.maxY - barSize.height - margin,
-                              width: barSize.width, height: barSize.height), display: true)
-        bar.isHidden = false
-        dot.isHidden = true
-        panel.allowKey = true  // clicking into a shown bar (even an answer popup) lets Esc/typing work
-        if focus {
-            panel.makeKeyAndOrderFront(nil)
-            panel.makeFirstResponder(input)
+        let th = transcriptHeight
+        let h = inputHeight + (th > 0 ? th + 1 : 0)
+        let top = s.midY + min(s.height * 0.18, 180)
+        return NSRect(x: (s.midX - chatWidth / 2).rounded(), y: (top - h).rounded(), width: chatWidth, height: h)
+    }
+
+    func layoutChat(animated: Bool) {
+        let f = targetFrame()
+        let th = compact ? 0 : f.height - inputHeight - (f.height > inputHeight ? 1 : 0)
+        let pad: CGFloat = 20
+        input.frame = NSRect(x: pad, y: (inputHeight - 22) / 2, width: chatWidth - pad * 2 - 120, height: 22)
+        hint.frame = NSRect(x: chatWidth - pad - 116, y: (inputHeight - 16) / 2, width: 116, height: 16)
+        divider.frame = NSRect(x: 0, y: inputHeight, width: chatWidth, height: 1)
+        divider.isHidden = th <= 0
+        transcriptScroll.frame = NSRect(x: pad, y: inputHeight + 1, width: chatWidth - pad * 2, height: max(th, 0))
+        transcriptScroll.isHidden = th <= 0
+        if shown {
+            if animated {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.12
+                    chat.animator().setFrame(f, display: true)
+                }
+            } else {
+                chat.setFrame(f, display: true)
+            }
         } else {
-            panel.orderFrontRegardless()  // show the answer without taking the keyboard
+            chat.setFrame(f, display: false)
+        }
+        transcript.scrollToEndOfDocument(nil)
+    }
+
+    // MARK: show / hide (slides up from below and fades in; reverse on hide)
+    func show(focus: Bool) {
+        idleHide?.invalidate()
+        if focus {
+            context = ["app": NSWorkspace.shared.frontmostApplication?.localizedName ?? ""]
+        }
+        let f = targetFrame()
+        chat.allowKey = !running
+        chat.ignoresMouseEvents = running
+        if !shown {
+            shown = true
+            layoutChat(animated: false)
+            chat.setFrame(f.offsetBy(dx: 0, dy: -36), display: false)
+            chat.alphaValue = 0
+            chat.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+                chat.animator().setFrame(f, display: true)
+                chat.animator().alphaValue = 1
+            }
+        }
+        else { layoutChat(animated: true) }  // e.g. back from the compact strip to the full card
+        if focus && !running {
+            chat.makeKeyAndOrderFront(nil)
+            chat.makeFirstResponder(input)
         }
     }
 
-    var context: [String: String] = [:]
+    func hide() {
+        guard shown else { return }
+        shown = false
+        idleHide?.invalidate()
+        chat.makeFirstResponder(nil)
+        chat.allowKey = false
+        let f = chat.frame
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.16
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            chat.animator().setFrame(f.offsetBy(dx: 0, dy: -24), display: true)
+            chat.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self = self, !self.shown else { return }
+            self.chat.orderOut(nil)
+            self.chat.alphaValue = 1
+        })
+    }
+
+    /// Give the keyboard back to the user's app (ordering out and back in is what really drops key status).
+    func releaseKeyboard() {
+        chat.makeFirstResponder(nil)
+        chat.allowKey = false
+        if chat.isKeyWindow {
+            chat.orderOut(nil)
+            if shown { chat.orderFrontRegardless() }
+        }
+    }
+
+    // Clicking elsewhere closes an idle chat, like Spotlight.
+    func windowDidResignKey(_ notification: Notification) {
+        if !running && shown { hide() }
+    }
 
     func toggle() {
         if running { stop(); return }
-        expanded ? collapse() : expand()
+        if shown { hide() } else { show(focus: true) }  // to type a follow-up into a shown card, click it
     }
 
-    @objc func closeBar() { if !running { collapse() } }  // while running the bar is already closed
-    @objc func openBar() { if !expanded && !running { expand() } }  // never take the keyboard mid-task
+    /// A card nobody looks at slides away after a while; clicking it keeps it.
+    func hideLater(_ seconds: TimeInterval = 45) {
+        idleHide?.invalidate()
+        idleHide = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            guard let self = self, !self.running, !self.chat.isKeyWindow else { return }
+            self.hide()
+        }
+    }
+
+    func escape() { if running { stop() } else { hide() } }
+    @objc func openChat() { if !running { show(focus: true) } }
     @objc func quit() {
         if running { agent.send(["type": "stop"]) }
         NSApp.terminate(nil)
     }
+    @objc func newChat() {
+        guard !running else { return }
+        agent.send(["type": "reset"])
+        transcript.string = ""
+        layoutChat(animated: shown)
+    }
 
-    func escape() {
-        if running { stop() } else { collapse() }
+    // MARK: transcript
+    func append(_ s: NSAttributedString) {
+        let ts = transcript.textStorage!
+        if ts.length > 0 { ts.append(NSAttributedString(string: "\n")) }
+        ts.append(s)
+        layoutChat(animated: shown)
+    }
+
+    func para(_ spacingBefore: CGFloat) -> NSParagraphStyle {
+        let p = NSMutableParagraphStyle()
+        p.paragraphSpacingBefore = spacingBefore
+        p.lineSpacing = 3
+        return p
+    }
+
+    func appendTurn(role: String, text: String, color: NSColor = Theme.text) {
+        let s = NSMutableAttributedString(string: role + "\n", attributes: [
+            .font: Theme.label, .foregroundColor: Theme.secondary, .paragraphStyle: para(10)])
+        s.append(NSAttributedString(string: text, attributes: [
+            .font: Theme.body, .foregroundColor: color, .paragraphStyle: para(2)]))
+        append(s)
+    }
+
+    func appendNote(_ text: String, color: NSColor = Theme.tertiary) {
+        if running {  // the compact strip shows the latest step
+            input.placeholderAttributedString = NSAttributedString(string: text,
+                attributes: [.foregroundColor: Theme.secondary, .font: Theme.mono])
+        }
+        append(NSAttributedString(string: text, attributes: [
+            .font: Theme.mono, .foregroundColor: color, .paragraphStyle: para(2)]))
     }
 
     // MARK: agent
     @objc func submit() {
         let text = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !running else { return }
-        output.string = "› \(text)\n"
         input.stringValue = ""
-        guard agent.alive else { append("⚠︎ agent isn't running (see ~/Library/Logs/Dot/daemon.err)"); return }
+        if text == "/new" || text == "/clear" { newChat(); return }
+        guard agent.alive else {
+            appendNote("Dot's agent isn't running. See ~/Library/Logs/Dot/daemon.err", color: Theme.danger)
+            return
+        }
+        appendTurn(role: "You", text: text)
         setRunning(true)
+        input.placeholderAttributedString = NSAttributedString(string: text,
+            attributes: [.foregroundColor: Theme.secondary, .font: Theme.input])
+        layoutChat(animated: true)  // slide down into the compact strip
         agent.send(["type": "ask", "text": text, "context": context])
-        // Get out of the way: collapse to the dot and hand the keyboard back to the user's app
-        // (a non-activating panel never took "frontmost" from it; collapse() gives up key status).
-        collapse()
+        // Stay visible to show progress, but let clicks pass through and hand the keyboard back,
+        // so the agent's typing and clicks land in the user's app, never in Dot.
+        chat.ignoresMouseEvents = true
+        releaseKeyboard()
     }
 
     @objc func stop() {
         guard running else { return }
         agent.send(["type": "stop"])
-        append("Stopping before the next action…")
+        hint.stringValue = "Stopping…"
     }
 
     func setRunning(_ r: Bool) {
         running = r
-        stopButton.isEnabled = r
-        dot.color = r ? NSColor(white: 0.35, alpha: 1) : .black
-    }
-
-    func append(_ line: String) {
-        output.string += line + "\n"
-        output.scrollToEndOfDocument(nil)
+        dot.color = r ? Theme.accent : .black
+        hint.stringValue = r ? "Working · ⌥Esc to stop" : "↵"
+        hint.textColor = r ? Theme.secondary : Theme.tertiary
+        input.isEditable = !r
+        if !r {
+            input.placeholderAttributedString = NSAttributedString(string: "Ask a follow-up…",
+                attributes: [.foregroundColor: Theme.tertiary, .font: Theme.input])
+        }
+        if !r {
+            chat.ignoresMouseEvents = false
+            chat.allowKey = true
+        }
     }
 
     func handle(_ ev: [String: Any]) {
-        let type = ev["type"] as? String ?? ""
-        switch type {
+        switch ev["type"] as? String ?? "" {
         case "tool":
             let name = ev["name"] as? String ?? "?"
             var detail = ""
             if let a = ev["args"] as? [String: Any], let d = try? JSONSerialization.data(withJSONObject: a),
-               let s = String(data: d, encoding: .utf8) { detail = String(s.prefix(120)) }
-            append("→ \(name) \(detail)")
+               let s = String(data: d, encoding: .utf8), s != "{}" { detail = " " + String(s.prefix(90)) }
+            appendNote("→ \(name)\(detail)")
         case "status":
-            if let t = ev["text"] as? String, t != "thinking" { append("· \(t)") }
+            if let t = ev["text"] as? String, t != "thinking" { appendNote(t) }
         case "done":
             setRunning(false)
             let status = ev["status"] as? String ?? ""
-            append("\n" + (ev["text"] as? String ?? "") + (status == "answered" ? "" : "  [\(status)]"))
+            let text = ev["text"] as? String ?? ""
+            appendTurn(role: "Dot", text: text, color: status == "answered" ? Theme.text : Theme.danger)
             if status != "answered" { dot.color = .systemRed }
-            if !expanded { expand(focus: false) }
+            show(focus: false)
+            hideLater()
         case "error":
             setRunning(false)
-            append("⚠︎ \(ev["text"] as? String ?? "error")")
+            appendNote(ev["text"] as? String ?? "error", color: Theme.danger)
             dot.color = .systemRed
-            if !expanded { expand(focus: false) }
+            show(focus: false)
+            hideLater(60)
+        case "reset":
+            transcript.string = ""
+            layoutChat(animated: shown)
         default:
             break
         }
