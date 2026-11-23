@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from dot.model import Model
+from dot.model import Model, ModelError
 from dot.tools import SCHEMAS, ToolResult, Tools
 
 MAX_TURNS = 40
@@ -126,7 +126,8 @@ class Agent:
             try:
                 reply = self.model.chat(messages, SCHEMAS)
             except Exception as e:  # noqa: BLE001 - network/model failure ends the task, never guesses
-                return end("error", f"Model call failed: {type(e).__name__}: {e}", turn)
+                msg = str(e) if isinstance(e, ModelError) else f"Model call failed: {type(e).__name__}: {e}"
+                return end("error", msg, turn)
             self.log.write(tid, "model", turn=turn, seconds=round(time.monotonic() - t0, 3), usage=reply.usage,
                            content=reply.content,
                            calls=[{"name": c.name, "args": c.arguments} for c in reply.tool_calls])

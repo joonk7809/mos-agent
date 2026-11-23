@@ -81,7 +81,14 @@ def main() -> None:  # pragma: no cover - wiring
         desktop = MacDesktop()
     except Exception as e:  # noqa: BLE001 - screen control is optional; tell the user once
         print(json.dumps({"type": "status", "text": f"screen control off: {e}"}), flush=True)
-    Daemon(Agent(OpenAICompatModel(), Tools(desktop)), sys.stdout).serve(sys.stdin)
+    m = OpenAICompatModel()
+    try:
+        problem = m.check()
+    except Exception as e:  # noqa: BLE001 - a broken check must not keep the agent from starting
+        problem = f"Startup check failed: {type(e).__name__}: {e}"
+    if problem:  # shown in the bar at launch, so a missing server is obvious before the first ask
+        print(json.dumps({"type": "error", "text": problem}), flush=True)
+    Daemon(Agent(m, Tools(desktop)), sys.stdout).serve(sys.stdin)
 
 
 if __name__ == "__main__":

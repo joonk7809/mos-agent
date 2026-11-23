@@ -2,6 +2,7 @@
 // the request goes to the local agent (python -m dot --daemon) over stdin/stdout.
 // On submit the bar collapses back to the dot and focus returns to your app, so the agent's typing
 // and clicks land there (and not on Dot). The dot turns grey while running; the answer pops up when done.
+// Close the bar: Esc, the ✕, or the hotkey again. Quit: right-click the dot > Quit Dot.
 // Stop (halts before the agent's next action): Option+Esc anywhere, the open hotkey while running,
 // a click on the grey dot, or Esc/Stop in the bar. Esc when idle = collapse.
 // Build: dot/mac/build.sh  (needs Xcode command line tools: xcode-select --install)
@@ -29,7 +30,13 @@ final class DotView: NSView {
         ring.lineWidth = 1
         ring.stroke()
     }
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control), let m = menu {  // Control-click = right-click
+            NSMenu.popUpContextMenu(m, with: event, for: self)
+        } else {
+            onClick?()
+        }
+    }
 }
 
 final class Agent {
@@ -154,7 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         bar.autoresizingMask = [.width, .height]
         root.addSubview(bar)
 
-        input = NSTextField(frame: NSRect(x: 14, y: barSize.height - 46, width: barSize.width - 28 - 70, height: 30))
+        input = NSTextField(frame: NSRect(x: 14, y: barSize.height - 46, width: barSize.width - 28 - 70 - 30, height: 30))
         input.placeholderString = "Ask Dot anything, or tell it what to do"
         input.font = .systemFont(ofSize: 15)
         input.bezelStyle = .roundedBezel
@@ -164,10 +171,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         bar.addSubview(input)
 
         stopButton = NSButton(title: "Stop", target: self, action: #selector(stop))
-        stopButton.frame = NSRect(x: barSize.width - 14 - 62, y: barSize.height - 46, width: 62, height: 30)
+        stopButton.frame = NSRect(x: barSize.width - 14 - 62 - 30, y: barSize.height - 46, width: 62, height: 30)
         stopButton.bezelStyle = .rounded
         stopButton.isEnabled = false
         bar.addSubview(stopButton)
+
+        // × closes the bar back to the dot (Esc does the same once you've clicked into it).
+        let close = NSButton(title: "✕", target: self, action: #selector(closeBar))
+        close.frame = NSRect(x: barSize.width - 14 - 26, y: barSize.height - 44, width: 26, height: 26)
+        close.bezelStyle = .inline
+        close.isBordered = false
+        close.toolTip = "Close (Esc). Right-click the dot to quit Dot."
+        bar.addSubview(close)
+
+        // Right-click (or Control-click) the dot or the bar: Open / Close / Quit Dot.
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Open Dot", action: #selector(openBar), keyEquivalent: "").target = self
+        menu.addItem(withTitle: "Close", action: #selector(closeBar), keyEquivalent: "").target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit Dot", action: #selector(quit), keyEquivalent: "q").target = self
+        bar.menu = menu
 
         let scroll = NSScrollView(frame: NSRect(x: 14, y: 12, width: barSize.width - 28, height: barSize.height - 66))
         scroll.hasVerticalScroller = true
@@ -187,6 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
         dot = DotView(frame: NSRect(x: 0, y: 0, width: dotSize, height: dotSize))
         dot.onClick = { [weak self] in self?.toggle() }
+        dot.menu = menu
         root.addSubview(dot)
         panel.orderFrontRegardless()
     }
@@ -222,8 +246,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                               width: barSize.width, height: barSize.height), display: true)
         bar.isHidden = false
         dot.isHidden = true
+        panel.allowKey = true  // clicking into a shown bar (even an answer popup) lets Esc/typing work
         if focus {
-            panel.allowKey = true
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(input)
         } else {
@@ -235,9 +259,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func toggle() {
         if running { stop(); return }
-        // An answer popup that isn't key yet: the hotkey opens the prompt instead of closing it.
-        if expanded && !panel.isKeyWindow { expand(); return }
         expanded ? collapse() : expand()
+    }
+
+    @objc func closeBar() { if !running { collapse() } }  // while running the bar is already closed
+    @objc func openBar() { if !expanded && !running { expand() } }  // never take the keyboard mid-task
+    @objc func quit() {
+        if running { agent.send(["type": "stop"]) }
+        NSApp.terminate(nil)
     }
 
     func escape() {

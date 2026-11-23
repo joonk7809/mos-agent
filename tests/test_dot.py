@@ -399,3 +399,94 @@ def test_daemon_stdin_eof_stops_agent(tmp_path: Any) -> None:
     assert dm.worker is not None
     dm.worker.join(5)
     assert d.actions == []  # the pending key press never ran
+
+
+# --- model server errors say what to do
+
+class _Resp(io.BytesIO):
+    def __enter__(self) -> _Resp:
+        return self
+
+    def __exit__(self, *a: Any) -> None:
+        return None
+
+
+def _http_error(code: int, body: str) -> Exception:
+    import urllib.error
+    return urllib.error.HTTPError("http://x", code, "err", {}, io.BytesIO(body.encode()))  # type: ignore[arg-type]
+
+
+def _fake_server(monkeypatch: Any, handler: Any) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+
+    def fake_urlopen(req: Any, timeout: float) -> _Resp:
+        body = json.loads(req.data) if req.data else None
+        calls.append({"url": req.full_url, "body": body})
+        return _Resp(json.dumps(handler(req.full_url, body)).encode())
+    monkeypatch.setattr(model.urllib.request, "urlopen", fake_urlopen)
+    return calls
+
+
+def test_missing_model_names_what_exists(monkeypatch: Any) -> None:
+    def h(url: str, body: Any) -> Any:
+        if url.endswith("/models"):
+            return {"data": [{"id": "qwen3:8b"}]}
+        raise _http_error(404, '{"error":"model \\"inkling-2-mini\\" not found"}')
+    _fake_server(monkeypatch, h)
+    m = model.OpenAICompatModel(base_url="http://127.0.0.1:11434/v1", model="inkling-2-mini")
+    with pytest.raises(model.ModelError) as e:
+        m.chat([{"role": "user", "content": "x"}], [])
+    assert "not found" in str(e.value) and "qwen3:8b" in str(e.value) and "ollama pull inkling-2-mini" in str(e.value)
+    assert m.check() is not None and "qwen3:8b" in str(m.check())
+
+
+def test_no_server_says_start_it(monkeypatch: Any) -> None:
+    import urllib.error
+
+    def h(url: str, body: Any) -> Any:
+        raise urllib.error.URLError(ConnectionRefusedError(61, "Connection refused"))
+    _fake_server(monkeypatch, h)
+    m = model.OpenAICompatModel(base_url="http://127.0.0.1:11434/v1")
+    with pytest.raises(model.ModelError) as e:
+        m.chat([{"role": "user", "content": "x"}], [])
+    assert "No model server answering at http://127.0.0.1:11434/v1" in str(e.value) and "ollama serve" in str(e.value)
+    assert "ollama serve" in str(m.check())
+
+
+def test_reasoning_rejected_is_dropped_and_retried(monkeypatch: Any) -> None:
+    def h(url: str, body: Any) -> Any:
+        if "reasoning_effort" in body:
+            raise _http_error(400, '{"error":"model does not support thinking"}')
+        return {"choices": [{"message": {"content": "ok"}}]}
+    calls = _fake_server(monkeypatch, h)
+    monkeypatch.delenv("DOT_REASONING", raising=False)
+    m = model.OpenAICompatModel(base_url="http://h/v1")
+    assert m.chat([{"role": "user", "content": "x"}], []).content == "ok"
+    assert m.chat([{"role": "user", "content": "x"}], []).content == "ok"
+    assert len(calls) == 3 and m.reasoning == ""  # retried once, then never sent again
+
+
+def test_check_ok_with_ollama_tag(monkeypatch: Any) -> None:
+    _fake_server(monkeypatch, lambda url, body: {"data": [{"id": "inkling-2-mini:latest"}]})
+    assert model.OpenAICompatModel(base_url="http://h/v1", model="inkling-2-mini").check() is None
+
+
+def test_model_error_text_reaches_the_user(tmp_path: Any) -> None:
+    class Down:
+        def chat(self, *a: Any) -> Reply:
+            raise model.ModelError("No model server answering at X. Start it.")
+    out = loop.Agent(Down(), Tools(None, run=fake_run), loop.ActionLog(str(tmp_path))).run("t")
+    assert out.text == "No model server answering at X. Start it."
+
+
+def test_check_survives_odd_models_replies(monkeypatch: Any) -> None:
+    for reply_body in ([], "x", {"data": None}, {"data": [1, None]}):
+        _fake_server(monkeypatch, lambda url, body, r=reply_body: r)
+        assert model.OpenAICompatModel(base_url="http://h/v1").check() is None
+
+
+def test_check_ignores_missing_models_route(monkeypatch: Any) -> None:
+    def h(url: str, body: Any) -> Any:
+        raise _http_error(404, "404 page not found")
+    _fake_server(monkeypatch, h)
+    assert model.OpenAICompatModel(base_url="http://h/v1").check() is None
