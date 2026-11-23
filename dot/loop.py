@@ -7,6 +7,7 @@ traced and turned into constraints later.
 from __future__ import annotations
 
 import base64
+import contextlib
 import datetime as dt
 import json
 import os
@@ -96,10 +97,8 @@ class Agent:
             return self._run(tid, task, context, on_event)
         except Exception as e:  # noqa: BLE001 - any failure ends the task with an event, never a silent hang
             text = f"Agent failed: {type(e).__name__}: {e}"
-            try:
+            with contextlib.suppress(Exception):  # the log itself may be what failed
                 self.log.write(tid, "end", status="error", text=text)
-            except Exception:  # noqa: BLE001,S110 - the log itself may be what failed
-                pass
             on_event({"type": "done", "status": "error", "text": text})
             return Outcome("error", text, 0)
 
