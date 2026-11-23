@@ -15,7 +15,7 @@ ignore = ["E501", "E731", "E741"]  # long prompt strings; short lambdas and `l` 
 
 [tool.mypy]
 python_version = "3.12"
-files = ["mos", "evals", "rom/tools"]
+files = ["mos", "evals", "rom/tools", "dot"]
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true

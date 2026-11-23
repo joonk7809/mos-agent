@@ -28,3 +28,8 @@ Newest first. One entry per working session: what changed, what's verified, what
 - Property tests found and fixed: dash-separated card numbers skipped confirmation (`mos/safety.py`); non-numeric/NaN model coordinates raised TypeError (`mos/maiui.py`).
 - Next: device-level eval baseline for MAI-UI-8B (needs emulator + GPU, see `run-evals`); stateful test of the session lifecycle.
 - Adversarial review (fresh subagent): FIX FIRST -> fixed. Bash guard now parses refspecs (blocks `+main`, `x:main`; allows `fix-main-bug`), card check uses digit groups (no longer flags dates/phones), hook tests in `tests/test_claude_hooks.py`.
+
+## 2026-11-23 - Dot v0 (local Mac hotkey agent, side project)
+- Research doc: https://claude.ai/artifact/952W6ZsVNQ6Q1ro4oSNdkG ("Inklink Mini 2" read as Thinking Machines' Inkling 2 Mini model).
+- Added `dot/`: agent loop + tools (shell, files, AppleScript, web, AX elements, screenshot/click/type/scroll/drag), JSON-lines daemon, Swift dot + Option+Space prompt bar, timing stats. Unbound by joon's decision (ADR 0011).
+- Next: first run on joon's Mac (24 GB, 4-bit GGUF); measure seconds per step with `python -m dot.stats`; pin Inkling's coordinate format.
