@@ -1,6 +1,6 @@
 # Dot: a local hotkey agent for the Mac (v0, unbound)
 
-A small black dot sits in the top-right corner. **Option+Space** opens a prompt bar: ask anything, or tell it
+A small black dot sits in the top-right corner. **Control+Space** opens a prompt bar: ask anything, or tell it
 to do something on the Mac. On Enter the bar collapses and focus goes back to your app while the dot (grey)
 works; the answer pops up when it's done. The agent runs locally against Inkling 2 Mini (or any OpenAI-compatible server)
 and acts through shell, files, AppleScript, `open`, web fetch and screen control (accessibility elements first,
@@ -8,7 +8,7 @@ screenshots + click/type/scroll/drag as the fallback). Research and design notes
 https://claude.ai/artifact/952W6ZsVNQ6Q1ro4oSNdkG. Why v0 has no permission gates: `docs/decisions/0011-dot-unbound-v0.md`.
 
 **v0 is unbound.** It can run any shell command, change or delete any file you can, send messages, and use the
-web, without asking. Only **Stop** (halts before the next action: **Option+Esc** anywhere, Option+Space or a click
+web, without asking. Only **Stop** (halts before the next action: **Option+Esc** anywhere, Control+Space or a click
 on the grey dot while it runs) and a few loop limits stand in the way. (Dot claims Option+Esc globally while
 it's open.)
 Run it on a Mac you're comfortable letting it change.
@@ -24,6 +24,16 @@ cd mos-agent && ~/.venvs/dot/bin/python -m dot "what's in my Downloads folder?"
 # 4. Build and open the dot
 dot/mac/build.sh ~/.venvs/dot/bin/python && open dot/mac/build/Dot.app
 ```
+**Hotkeys.** Defaults: Control+Space opens/closes (and stops while running), Option+Esc stops. macOS uses
+Control+Space to switch input sources, and that wins: turn it off in System Settings > Keyboard > Keyboard
+Shortcuts > Input Sources (Dot warns on launch if it's still on). To use other keys, no rebuild needed:
+```bash
+defaults write dev.mos.dot hotkey "cmd+shift+space"   # open/close
+defaults write dev.mos.dot stopHotkey "ctrl+esc"      # stop
+```
+then quit and reopen Dot. Combos: ctrl/opt/cmd/shift + a letter, digit, space, esc, return, tab, F1-F12 or
+`` ` / . , ; ' - = ``. `DOT_HOTKEY` / `DOT_STOP_HOTKEY` at build or launch time also work.
+
 Grant **Dot** Accessibility and Screen Recording in System Settings > Privacy & Security (macOS prompts on first
 use; Automation prompts appear per app the first time AppleScript drives it).
 

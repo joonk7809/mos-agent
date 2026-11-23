@@ -21,6 +21,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>NSAppleEventsUsageDescription</key><string>Dot controls apps on your behalf.</string>
   <key>DotRepo</key><string>$repo</string>
   <key>DotPython</key><string>$python</string>
+  <key>DotHotkey</key><string>${DOT_HOTKEY:-ctrl+space}</string>
+  <key>DotStopHotkey</key><string>${DOT_STOP_HOTKEY:-opt+esc}</string>
 </dict></plist>
 PLIST
 codesign --force --sign - "$app"
