@@ -24,6 +24,11 @@ cd mos-agent && ~/.venvs/dot/bin/python -m dot "what's in my Downloads folder?"
 # 4. Build and open the dot
 dot/mac/build.sh ~/.venvs/dot/bin/python && open dot/mac/build/Dot.app
 ```
+**Close and quit.** The hotkey again, Esc, or the ✕ closes the bar back to the dot. To quit Dot, right-click
+(or Control-click) the dot and choose **Quit Dot**, or run `pkill -x Dot`. If something fails, the bar shows
+the reason (for example "No model server answering at http://127.0.0.1:11434/v1 ... Start it"), and the
+agent's own log is `~/Library/Logs/Dot/daemon.err`.
+
 **Hotkeys.** Defaults: Control+Space opens/closes (and stops while running), Option+Esc stops. macOS uses
 Control+Space to switch input sources, and that wins: turn it off in System Settings > Keyboard > Keyboard
 Shortcuts > Input Sources (Dot warns on launch if it's on and you have more than one input source). macOS

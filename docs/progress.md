@@ -34,3 +34,4 @@ Newest first. One entry per working session: what changed, what's verified, what
 - Added `dot/`: agent loop + tools (shell, files, AppleScript, web, AX elements, screenshot/click/type/scroll/drag), JSON-lines daemon, Swift dot + hotkey prompt bar, timing stats. Unbound by joon's decision (ADR 0011).
 - Next: first run on joon's Mac (24 GB, 4-bit GGUF); measure seconds per step with `python -m dot.stats`; pin Inkling's coordinate format.
 - Hotkey moved to Control+Space (Option+Space is taken by other agents on joon's Mac); both hotkeys configurable via `defaults write dev.mos.dot hotkey|stopHotkey`; Dot warns on launch about the macOS input-source shortcut or a taken combo.
+- Fixed after joon's first run: the bar couldn't be closed (✕, Esc on popups, hotkey toggles, right-click Quit), and model errors now say what to do (server down / model missing with the server's model list); startup check shows it at launch.
