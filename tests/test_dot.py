@@ -477,3 +477,16 @@ def test_model_error_text_reaches_the_user(tmp_path: Any) -> None:
             raise model.ModelError("No model server answering at X. Start it.")
     out = loop.Agent(Down(), Tools(None, run=fake_run), loop.ActionLog(str(tmp_path))).run("t")
     assert out.text == "No model server answering at X. Start it."
+
+
+def test_check_survives_odd_models_replies(monkeypatch: Any) -> None:
+    for reply_body in ([], "x", {"data": None}, {"data": [1, None]}):
+        _fake_server(monkeypatch, lambda url, body, r=reply_body: r)
+        assert model.OpenAICompatModel(base_url="http://h/v1").check() is None
+
+
+def test_check_ignores_missing_models_route(monkeypatch: Any) -> None:
+    def h(url: str, body: Any) -> Any:
+        raise _http_error(404, "404 page not found")
+    _fake_server(monkeypatch, h)
+    assert model.OpenAICompatModel(base_url="http://h/v1").check() is None

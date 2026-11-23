@@ -30,7 +30,13 @@ final class DotView: NSView {
         ring.lineWidth = 1
         ring.stroke()
     }
-    override func mouseDown(with event: NSEvent) { onClick?() }
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control), let m = menu {  // Control-click = right-click
+            NSMenu.popUpContextMenu(m, with: event, for: self)
+        } else {
+            onClick?()
+        }
+    }
 }
 
 final class Agent {
@@ -256,8 +262,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         expanded ? collapse() : expand()
     }
 
-    @objc func closeBar() { if !running { collapse() } else { stop() } }
-    @objc func openBar() { if !expanded { expand() } }
+    @objc func closeBar() { if !running { collapse() } }  // while running the bar is already closed
+    @objc func openBar() { if !expanded && !running { expand() } }  // never take the keyboard mid-task
     @objc func quit() {
         if running { agent.send(["type": "stop"]) }
         NSApp.terminate(nil)

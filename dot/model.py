@@ -125,7 +125,8 @@ class OpenAICompatModel:
         """Model names the server lists (OpenAI-compatible /models); [] if it can't say."""
         try:
             data = self._request("/models", timeout=5)
-            return [str(m.get("id")) for m in data.get("data", []) if isinstance(m, dict)]
+            items = data.get("data") if isinstance(data, dict) else None
+            return [str(m.get("id")) for m in items if isinstance(m, dict)] if isinstance(items, list) else []
         except Exception:  # noqa: BLE001 - best effort, used for hints
             return []
 
@@ -133,9 +134,14 @@ class OpenAICompatModel:
         """Startup check: None if the server is up and has the model, else what to fix."""
         try:
             data = self._request("/models", timeout=5)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:  # server has no /models route; chat may still work, so don't alarm
+                return None
+            return str(self.explain(e))
         except Exception as e:  # noqa: BLE001
             return str(self.explain(e))
-        names = [str(m.get("id")) for m in data.get("data", []) if isinstance(m, dict)]
+        items = data.get("data") if isinstance(data, dict) else None
+        names = [str(m.get("id")) for m in items if isinstance(m, dict)] if isinstance(items, list) else []
         if names and not any(n == self.model or n.split(":")[0] == self.model for n in names):
             return (f"Model '{self.model}' isn't on the server at {self.base_url} (it has: {', '.join(names)}). "
                     f"Run `ollama pull {self.model}` or set DOT_MODEL.")
