@@ -351,7 +351,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             default: return nil
             }
         }
-        if mods == 0 && !key.hasPrefix("f") { return nil }
+        let isFKey = (1...12).map { "f\($0)" }.contains(key)
+        if mods == 0 && !isFKey { return nil }  // a bare letter would swallow that key everywhere
         return (UInt32(code), UInt32(mods))
     }
 
@@ -365,8 +366,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
                 .dictionary(forKey: "AppleSymbolicHotKeys")?[id] as? [String: Any] else {
             return true  // no entry = macOS default, which is enabled
         }
-        if let enabled = hk["enabled"] as? NSNumber { return enabled.boolValue }
-        return true
+        if let enabled = hk["enabled"] as? NSNumber, !enabled.boolValue { return false }
+        // With a single input source the shortcut has nothing to switch to and doesn't get in the way.
+        return typingSourceCount() > 1
+    }
+
+    func typingSourceCount() -> Int {
+        let sources = UserDefaults(suiteName: "com.apple.HIToolbox")?.array(forKey: "AppleEnabledInputSources") ?? []
+        return sources.compactMap { $0 as? [String: Any] }
+            .filter { ["Keyboard Layout", "Input Mode"].contains($0["InputSourceKind"] as? String ?? "") }.count
     }
 
     func register(_ name: String, _ combo: String, id: UInt32, ref: inout EventHotKeyRef?) {
@@ -381,7 +389,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             startupNotes.append("Couldn't register \(combo) (error \(status)). Pick another with: "
                                 + "defaults write dev.mos.dot \(id == 1 ? "hotkey" : "stopHotkey") \"<combo>\"")
         } else if inputSourceConflict(code, mods) {
-            startupNotes.append("\(combo) is also macOS's \"switch input source\" shortcut, which wins. Turn it off in "
+            startupNotes.append("\(combo) is also macOS's \"switch input source\" shortcut, which may take it. If so, turn it off in "
                                 + "System Settings > Keyboard > Keyboard Shortcuts > Input Sources, then relaunch Dot.")
         }
     }

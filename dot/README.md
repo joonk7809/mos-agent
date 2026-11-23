@@ -26,7 +26,8 @@ dot/mac/build.sh ~/.venvs/dot/bin/python && open dot/mac/build/Dot.app
 ```
 **Hotkeys.** Defaults: Control+Space opens/closes (and stops while running), Option+Esc stops. macOS uses
 Control+Space to switch input sources, and that wins: turn it off in System Settings > Keyboard > Keyboard
-Shortcuts > Input Sources (Dot warns on launch if it's still on). To use other keys, no rebuild needed:
+Shortcuts > Input Sources (Dot warns on launch if it's on and you have more than one input source). macOS
+doesn't report clashes with other apps' hotkeys, so if a combo does nothing, pick another. To use other keys, no rebuild needed:
 ```bash
 defaults write dev.mos.dot hotkey "cmd+shift+space"   # open/close
 defaults write dev.mos.dot stopHotkey "ctrl+esc"      # stop
