@@ -17,7 +17,6 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-
 # Inkling 2 Mini, 4-bit GGUF (~15 GB) pulled straight from Hugging Face by Ollama. Dot never switches to
 # another model on its own: if this one isn't on the server, it says so and stops.
 DEFAULT_MODEL = "hf.co/ggml-org/Inkling-2-Mini-GGUF:IQ4_NL"
