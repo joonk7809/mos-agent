@@ -23,6 +23,7 @@ class Daemon:
         self.out = out
         self.lock = threading.Lock()
         self.worker: threading.Thread | None = None
+        self.active = False  # a task is in progress (cleared the moment its "done" goes out)
 
     def emit(self, ev: dict[str, Any]) -> None:
         with self.lock:
@@ -30,7 +31,12 @@ class Daemon:
             self.out.flush()
 
     def busy(self) -> bool:
-        return self.worker is not None and self.worker.is_alive()
+        return self.active
+
+    def _agent_event(self, ev: dict[str, Any]) -> None:
+        if ev.get("type") == "done":
+            self.active = False
+        self.emit(ev)
 
     def handle(self, line: str) -> bool:
         """Handle one input line. Returns False on quit."""
@@ -63,7 +69,8 @@ class Daemon:
             else:
                 ctx = msg.get("context") if isinstance(msg.get("context"), dict) else {}
                 self.agent.stop.clear()
-                self.worker = threading.Thread(target=self.agent.run, args=(text, ctx, self.emit), daemon=True)
+                self.active = True
+                self.worker = threading.Thread(target=self.agent.run, args=(text, ctx, self._agent_event), daemon=True)
                 self.worker.start()
         else:
             self.emit({"type": "error", "text": f"unknown type {kind!r}"})

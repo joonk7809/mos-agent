@@ -181,6 +181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var hotKeyRef: EventHotKeyRef?
     var context: [String: String] = [:]
     var idleHide: Timer?
+    // While a task runs the card shrinks to a one-line status strip at the bottom of the screen,
+    // so it hides as little as possible of what the agent sees and clicks.
+    var compact: Bool { running }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         AppDelegate.shared = self
@@ -194,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !startupNotes.isEmpty {  // hotkey problems: say so once, without taking the keyboard
             startupNotes.forEach { appendNote($0, color: Theme.danger) }
             show(focus: false)
+            hideLater(60)
         }
     }
 
@@ -244,6 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         chat.isOpaque = false
         chat.backgroundColor = .clear
         chat.hasShadow = true
+        chat.sharingType = .none  // keep Dot out of screenshots (the agent's own included) where macOS honours it
         chat.hidesOnDeactivate = false
         chat.delegate = self
         chat.onEscape = { [weak self] in self?.escape() }
@@ -307,6 +312,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Card height follows the content; its top edge stays put (a little above the screen's centre).
     func targetFrame() -> NSRect {
         let s = screen()
+        if compact {
+            return NSRect(x: (s.midX - chatWidth / 2).rounded(), y: s.minY + 28, width: chatWidth, height: inputHeight)
+        }
         let th = transcriptHeight
         let h = inputHeight + (th > 0 ? th + 1 : 0)
         let top = s.midY + min(s.height * 0.18, 180)
@@ -315,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func layoutChat(animated: Bool) {
         let f = targetFrame()
-        let th = f.height - inputHeight - (f.height > inputHeight ? 1 : 0)
+        let th = compact ? 0 : f.height - inputHeight - (f.height > inputHeight ? 1 : 0)
         let pad: CGFloat = 20
         input.frame = NSRect(x: pad, y: (inputHeight - 22) / 2, width: chatWidth - pad * 2 - 120, height: 22)
         hint.frame = NSRect(x: chatWidth - pad - 116, y: (inputHeight - 16) / 2, width: 116, height: 16)
@@ -360,6 +368,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 chat.animator().alphaValue = 1
             }
         }
+        else { layoutChat(animated: true) }  // e.g. back from the compact strip to the full card
         if focus && !running {
             chat.makeKeyAndOrderFront(nil)
             chat.makeFirstResponder(input)
@@ -370,7 +379,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard shown else { return }
         shown = false
         idleHide?.invalidate()
-        releaseKeyboard()
+        chat.makeFirstResponder(nil)
+        chat.allowKey = false
         let f = chat.frame
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.16
@@ -401,7 +411,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func toggle() {
         if running { stop(); return }
-        if shown && chat.isKeyWindow { hide() } else { show(focus: true) }
+        if shown { hide() } else { show(focus: true) }  // to type a follow-up into a shown card, click it
+    }
+
+    /// A card nobody looks at slides away after a while; clicking it keeps it.
+    func hideLater(_ seconds: TimeInterval = 45) {
+        idleHide?.invalidate()
+        idleHide = Timer.scheduledTimer(withTimeInterval: seconds, repeats: false) { [weak self] _ in
+            guard let self = self, !self.running, !self.chat.isKeyWindow else { return }
+            self.hide()
+        }
     }
 
     func escape() { if running { stop() } else { hide() } }
@@ -441,6 +460,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func appendNote(_ text: String, color: NSColor = Theme.tertiary) {
+        if running {  // the compact strip shows the latest step
+            input.placeholderAttributedString = NSAttributedString(string: text,
+                attributes: [.foregroundColor: Theme.secondary, .font: Theme.mono])
+        }
         append(NSAttributedString(string: text, attributes: [
             .font: Theme.mono, .foregroundColor: color, .paragraphStyle: para(2)]))
     }
@@ -457,6 +480,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         appendTurn(role: "You", text: text)
         setRunning(true)
+        input.placeholderAttributedString = NSAttributedString(string: text,
+            attributes: [.foregroundColor: Theme.secondary, .font: Theme.input])
+        layoutChat(animated: true)  // slide down into the compact strip
         agent.send(["type": "ask", "text": text, "context": context])
         // Stay visible to show progress, but let clicks pass through and hand the keyboard back,
         // so the agent's typing and clicks land in the user's app, never in Dot.
@@ -476,8 +502,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         hint.stringValue = r ? "Working · ⌥Esc to stop" : "↵"
         hint.textColor = r ? Theme.secondary : Theme.tertiary
         input.isEditable = !r
-        input.placeholderAttributedString = NSAttributedString(string: r ? "" : "Ask a follow-up…",
-            attributes: [.foregroundColor: Theme.tertiary, .font: Theme.input])
+        if !r {
+            input.placeholderAttributedString = NSAttributedString(string: "Ask a follow-up…",
+                attributes: [.foregroundColor: Theme.tertiary, .font: Theme.input])
+        }
         if !r {
             chat.ignoresMouseEvents = false
             chat.allowKey = true
@@ -501,17 +529,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             appendTurn(role: "Dot", text: text, color: status == "answered" ? Theme.text : Theme.danger)
             if status != "answered" { dot.color = .systemRed }
             show(focus: false)
-            // An answer nobody looks at slides away after a while; clicking it keeps it.
-            idleHide?.invalidate()
-            idleHide = Timer.scheduledTimer(withTimeInterval: 45, repeats: false) { [weak self] _ in
-                guard let self = self, !self.running, !self.chat.isKeyWindow else { return }
-                self.hide()
-            }
+            hideLater()
         case "error":
             setRunning(false)
             appendNote(ev["text"] as? String ?? "error", color: Theme.danger)
             dot.color = .systemRed
             show(focus: false)
+            hideLater(60)
         case "reset":
             transcript.string = ""
             layoutChat(animated: shown)

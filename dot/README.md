@@ -3,7 +3,8 @@
 A small black dot rests in the top-right corner. **Control+Space** slides a small chat card up into the middle of
 the screen: ask anything, or tell it to do something on the Mac, then ask follow-ups (it keeps the conversation;
 right-click the dot > New Chat, or type `/new`, to start over). While it works, the dot turns green and the card
-shows each step but lets clicks through and gives the keyboard back to your app; the answer appears when done.
+shrinks to a one-line status strip at the bottom of the screen (clicks pass through it, and your app keeps the
+keyboard); the full card comes back with the answer.
 Mock-ups (light/dark): `/mnt/project-files/dot-mock/` in the project. The agent runs locally against Inkling 2 Mini (or any OpenAI-compatible server)
 and acts through shell, files, AppleScript, `open`, web fetch and screen control (accessibility elements first,
 screenshots + click/type/scroll/drag as the fallback). Research and design notes:

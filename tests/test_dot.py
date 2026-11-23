@@ -540,3 +540,22 @@ def test_daemon_reset(tmp_path: Any) -> None:
     out = io.StringIO()
     daemon.Daemon(a, out).handle('{"type":"reset"}')
     assert a.history == [] and json.loads(out.getvalue().splitlines()[-1]) == {"type": "reset"}
+
+
+def test_daemon_not_busy_once_done_is_sent(tmp_path: Any) -> None:
+    a, _ = agent([reply(content="one"), reply(content="two")], tmp_path)
+    out = io.StringIO()
+    d = daemon.Daemon(a, out)
+    seen_done = threading.Event()
+    orig = d.emit
+
+    def emit(ev: dict[str, Any]) -> None:
+        orig(ev)
+        if ev.get("type") == "done":
+            # Respond to "done" right away, as the app does, before the worker thread has exited.
+            d.handle('{"type":"reset"}')
+            seen_done.set()
+    d.emit = emit  # type: ignore[method-assign]
+    d.handle('{"type":"ask","text":"hi"}')
+    assert seen_done.wait(5)
+    assert not any("busy" in line for line in out.getvalue().splitlines())
