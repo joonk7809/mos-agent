@@ -79,6 +79,8 @@ MODIFIERS = {"cmd": "command down", "command": "command down", "ctrl": "control 
 def key_applescript(combo: str) -> str:
     """AppleScript for a key combo. Raises ValueError on an unknown key."""
     combo = combo.strip().lower()
+    if combo == "+":
+        combo = "plus"
     if combo.endswith("++"):  # "cmd++" = cmd and the plus key
         combo = combo[:-2] + "+plus"
     parts = [p.strip() for p in combo.split("+") if p.strip()]

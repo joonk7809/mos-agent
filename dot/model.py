@@ -46,7 +46,9 @@ def parse_message(msg: dict[str, Any]) -> Reply:
     calls: list[ToolCall] = []
     for i, tc in enumerate(msg.get("tool_calls") or []):
         fn = tc.get("function") or {}
-        raw = fn.get("arguments", "")
+        raw = fn.get("arguments")
+        if raw is None:  # missing or null = no arguments
+            raw = ""
         args: dict[str, Any] = {}
         err = None
         if isinstance(raw, dict):  # Ollama sometimes sends a dict already

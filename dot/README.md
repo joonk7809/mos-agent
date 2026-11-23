@@ -9,7 +9,8 @@ https://claude.ai/artifact/952W6ZsVNQ6Q1ro4oSNdkG. Why v0 has no permission gate
 
 **v0 is unbound.** It can run any shell command, change or delete any file you can, send messages, and use the
 web, without asking. Only **Stop** (halts before the next action: **Option+Esc** anywhere, Option+Space or a click
-on the grey dot while it runs) and a few loop limits stand in the way.
+on the grey dot while it runs) and a few loop limits stand in the way. (Dot claims Option+Esc globally while
+it's open.)
 Run it on a Mac you're comfortable letting it change.
 
 ## Run it (macOS 14+, Apple silicon)

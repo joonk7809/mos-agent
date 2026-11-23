@@ -10,7 +10,10 @@ import Carbon
 
 final class DotPanel: NSPanel {
     var onEscape: (() -> Void)?
-    override var canBecomeKey: Bool { true }
+    // Key only while the prompt is open for typing; otherwise the user's app keeps the keyboard,
+    // so the agent's typing and key presses land there and never in Dot.
+    var allowKey = false
+    override var canBecomeKey: Bool { allowKey }
     override func cancelOperation(_ sender: Any?) { onEscape?() }
 }
 
@@ -111,6 +114,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         AppDelegate.shared = self
         NSApp.setActivationPolicy(.accessory)
+        signal(SIGPIPE, SIG_IGN)  // a dead daemon surfaces as a write error, not a crash
         buildPanel()
         registerHotKey()
         agent.onEvent = { [weak self] ev in self?.handle(ev) }
@@ -183,7 +187,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         panel.orderFrontRegardless()
     }
 
+    func releaseKeyboard() {
+        panel.makeFirstResponder(nil)
+        panel.allowKey = false
+        if panel.isKeyWindow { panel.orderOut(nil) }  // ordering out is what really gives up key status
+    }
+
     func collapse() {
+        releaseKeyboard()
         expanded = false
         let s = screenFrame()
         bar.isHidden = true
@@ -208,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         bar.isHidden = false
         dot.isHidden = true
         if focus {
+            panel.allowKey = true
             panel.makeKeyAndOrderFront(nil)
             panel.makeFirstResponder(input)
         } else {
@@ -219,6 +231,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
 
     func toggle() {
         if running { stop(); return }
+        // An answer popup that isn't key yet: the hotkey opens the prompt instead of closing it.
+        if expanded && !panel.isKeyWindow { expand(); return }
         expanded ? collapse() : expand()
     }
 
@@ -235,10 +249,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard agent.alive else { append("⚠︎ agent isn't running (see ~/Library/Logs/Dot/daemon.err)"); return }
         setRunning(true)
         agent.send(["type": "ask", "text": text, "context": context])
-        // Get out of the way: collapse to the dot and hand the keyboard back to the user's app.
+        // Get out of the way: collapse to the dot and hand the keyboard back to the user's app
+        // (a non-activating panel never took "frontmost" from it; collapse() gives up key status).
         collapse()
-        panel.resignKey()
-        previousApp?.activate(options: [])
     }
 
     @objc func stop() {

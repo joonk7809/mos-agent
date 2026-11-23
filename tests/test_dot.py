@@ -296,6 +296,9 @@ def test_utf16_chunks_roundtrip_and_fit(text: str) -> None:
 
 
 def test_key_applescript() -> None:
+    assert key_applescript("+") == 'tell application "System Events" to keystroke "+"'
+    assert parse_message({"tool_calls": [{"function": {"name": "screenshot", "arguments": None}}]}
+                         ).tool_calls[0].parse_error is None
     assert key_applescript("cmd++") == 'tell application "System Events" to keystroke "+" using {command down}'
     assert key_applescript("cmd+shift+t") == \
         'tell application "System Events" to keystroke "t" using {command down, shift down}'
