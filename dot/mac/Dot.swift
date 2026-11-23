@@ -1,8 +1,8 @@
-// Dot: an always-on black dot in the top-right corner. Option+Space opens a prompt bar;
+// Dot: an always-on black dot in the top-right corner. Control+Space (configurable) opens a prompt bar;
 // the request goes to the local agent (python -m dot --daemon) over stdin/stdout.
 // On submit the bar collapses back to the dot and focus returns to your app, so the agent's typing
 // and clicks land there (and not on Dot). The dot turns grey while running; the answer pops up when done.
-// Stop (halts before the agent's next action): Option+Esc anywhere, Option+Space while running,
+// Stop (halts before the agent's next action): Option+Esc anywhere, the open hotkey while running,
 // a click on the grey dot, or Esc/Stop in the bar. Esc when idle = collapse.
 // Build: dot/mac/build.sh  (needs Xcode command line tools: xcode-select --install)
 import AppKit
@@ -120,6 +120,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         agent.onEvent = { [weak self] ev in self?.handle(ev) }
         agent.start()
         collapse()
+        if !startupNotes.isEmpty {  // hotkey problems: say so once, without taking the keyboard
+            output.string = startupNotes.map { "⚠︎ " + $0 }.joined(separator: "\n") + "\n"
+            expand(focus: false)
+        }
     }
 
     func applicationWillTerminate(_ n: Notification) { agent.stopProcess() }
@@ -298,8 +302,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         }
     }
 
-    // MARK: hotkeys: Option+Space = open/close (Stop while running), Option+Esc = Stop
+    // MARK: hotkeys
+    // Open/close (Stop while running), default Control+Space; Stop, default Option+Esc. Change them with
+    //   defaults write dev.mos.dot hotkey "cmd+shift+space"     (or DOT_HOTKEY / build-time DotHotkey)
+    //   defaults write dev.mos.dot stopHotkey "ctrl+esc"        (or DOT_STOP_HOTKEY / DotStopHotkey)
     var stopKeyRef: EventHotKeyRef?
+    var startupNotes: [String] = []
+
+    func setting(_ env: String, _ defaultsKey: String, _ plistKey: String, _ fallback: String) -> String {
+        if let v = ProcessInfo.processInfo.environment[env], !v.isEmpty { return v }
+        if let v = UserDefaults.standard.string(forKey: defaultsKey), !v.isEmpty { return v }
+        if let v = Bundle.main.object(forInfoDictionaryKey: plistKey) as? String, !v.isEmpty { return v }
+        return fallback
+    }
+
+    static let keyCodes: [String: Int] = {
+        var m: [String: Int] = ["space": kVK_Space, "esc": kVK_Escape, "escape": kVK_Escape, "return": kVK_Return,
+                                "enter": kVK_Return, "tab": kVK_Tab, "`": kVK_ANSI_Grave, "/": kVK_ANSI_Slash,
+                                ".": kVK_ANSI_Period, ",": kVK_ANSI_Comma, ";": kVK_ANSI_Semicolon,
+                                "'": kVK_ANSI_Quote, "-": kVK_ANSI_Minus, "=": kVK_ANSI_Equal]
+        let letters: [Int] = [kVK_ANSI_A, kVK_ANSI_B, kVK_ANSI_C, kVK_ANSI_D, kVK_ANSI_E, kVK_ANSI_F, kVK_ANSI_G,
+                              kVK_ANSI_H, kVK_ANSI_I, kVK_ANSI_J, kVK_ANSI_K, kVK_ANSI_L, kVK_ANSI_M, kVK_ANSI_N,
+                              kVK_ANSI_O, kVK_ANSI_P, kVK_ANSI_Q, kVK_ANSI_R, kVK_ANSI_S, kVK_ANSI_T, kVK_ANSI_U,
+                              kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_X, kVK_ANSI_Y, kVK_ANSI_Z]
+        for (i, c) in "abcdefghijklmnopqrstuvwxyz".enumerated() { m[String(c)] = letters[i] }
+        let digits: [Int] = [kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6,
+                             kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
+        for i in 0..<10 { m[String(i)] = digits[i] }
+        let fkeys: [Int] = [kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10,
+                            kVK_F11, kVK_F12]
+        for i in 0..<12 { m["f\(i + 1)"] = fkeys[i] }
+        return m
+    }()
+
+    /// Note: macOS doesn't tell us when another app already owns a combo; the newest registrant usually
+    /// wins. If the hotkey does nothing, pick another one.
+    /// "ctrl+space" -> (keyCode, Carbon modifiers). nil if unparseable or without a modifier (except F-keys).
+    func parseCombo(_ combo: String) -> (UInt32, UInt32)? {
+        let parts = combo.lowercased().split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let key = parts.last, let code = AppDelegate.keyCodes[key] else { return nil }
+        var mods = 0
+        for m in parts.dropLast() {
+            switch m {
+            case "ctrl", "control": mods |= controlKey
+            case "opt", "alt", "option": mods |= optionKey
+            case "cmd", "command": mods |= cmdKey
+            case "shift": mods |= shiftKey
+            default: return nil
+            }
+        }
+        let isFKey = (1...12).map { "f\($0)" }.contains(key)
+        if mods == 0 && !isFKey { return nil }  // a bare letter would swallow that key everywhere
+        return (UInt32(code), UInt32(mods))
+    }
+
+    /// macOS binds Control+Space to "Select the previous input source" (symbolic hotkey 60) and
+    /// Control+Option+Space to "next source" (61). The system wins over our hotkey when they're on.
+    func inputSourceConflict(_ code: UInt32, _ mods: UInt32) -> Bool {
+        guard code == UInt32(kVK_Space), mods & UInt32(controlKey) != 0, mods & UInt32(cmdKey) == 0,
+              mods & UInt32(shiftKey) == 0 else { return false }
+        let id = mods & UInt32(optionKey) != 0 ? "61" : "60"
+        guard let hk = UserDefaults(suiteName: "com.apple.symbolichotkeys")?
+                .dictionary(forKey: "AppleSymbolicHotKeys")?[id] as? [String: Any] else {
+            return true  // no entry = macOS default, which is enabled
+        }
+        if let enabled = hk["enabled"] as? NSNumber, !enabled.boolValue { return false }
+        // With a single input source the shortcut has nothing to switch to and doesn't get in the way.
+        return typingSourceCount() > 1
+    }
+
+    func typingSourceCount() -> Int {
+        let sources = UserDefaults(suiteName: "com.apple.HIToolbox")?.array(forKey: "AppleEnabledInputSources") ?? []
+        return sources.compactMap { $0 as? [String: Any] }
+            .filter { ["Keyboard Layout", "Input Mode"].contains($0["InputSourceKind"] as? String ?? "") }.count
+    }
+
+    func register(_ name: String, _ combo: String, id: UInt32, ref: inout EventHotKeyRef?) {
+        guard let parsed = parseCombo(combo) else {
+            startupNotes.append("Can't read the \(name) hotkey \"\(combo)\". Use e.g. ctrl+space or cmd+shift+k.")
+            return
+        }
+        let (code, mods) = parsed
+        let status = RegisterEventHotKey(code, mods, EventHotKeyID(signature: OSType(0x444F_5421), id: id),
+                                         GetApplicationEventTarget(), 0, &ref)
+        if status != noErr {
+            startupNotes.append("Couldn't register \(combo) (error \(status)). Pick another with: "
+                                + "defaults write dev.mos.dot \(id == 1 ? "hotkey" : "stopHotkey") \"<combo>\"")
+        } else if inputSourceConflict(code, mods) {
+            startupNotes.append("\(combo) is also macOS's \"switch input source\" shortcut, which may take it. If so, turn it off in "
+                                + "System Settings > Keyboard > Keyboard Shortcuts > Input Sources, then relaunch Dot.")
+        }
+    }
 
     func registerHotKey() {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
@@ -313,11 +406,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             }
             return noErr
         }, 1, &spec, nil, nil)
-        let sig = OSType(0x444F_5421)  // "DOT!"
-        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: sig, id: 1),
-                            GetApplicationEventTarget(), 0, &hotKeyRef)
-        RegisterEventHotKey(UInt32(kVK_Escape), UInt32(optionKey), EventHotKeyID(signature: sig, id: 2),
-                            GetApplicationEventTarget(), 0, &stopKeyRef)
+        register("open", setting("DOT_HOTKEY", "hotkey", "DotHotkey", "ctrl+space"), id: 1, ref: &hotKeyRef)
+        register("stop", setting("DOT_STOP_HOTKEY", "stopHotkey", "DotStopHotkey", "opt+esc"), id: 2,
+                 ref: &stopKeyRef)
     }
 }
 
