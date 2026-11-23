@@ -14,3 +14,4 @@ Architecture and research decisions, one file each ([why](0001-record-decisions-
 | [0008](0008-lineageos-rom-with-privileged-bridge.md) | Build a LineageOS MOS ROM with a small privileged input bridge | Accepted | joon / agent |
 | [0009](0009-first-rom-device.md) | First MOS ROM device: Pixel 7a (lynx) | Accepted (pager #6) | joon |
 | [0010](0010-emulator-first.md) | Prove MOS on emulators before buying a phone | Accepted | joon / agent |
+| [0011](0011-dot-unbound-v0.md) | Ship the Mac "Dot" agent unbound first; add constraints where failures show up | Accepted | joon / agent |
