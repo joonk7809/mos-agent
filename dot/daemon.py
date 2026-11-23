@@ -55,6 +55,7 @@ class Daemon:
                 self.emit({"type": "error", "text": "busy: press Stop first"})
             else:
                 ctx = msg.get("context") if isinstance(msg.get("context"), dict) else {}
+                self.agent.stop.clear()
                 self.worker = threading.Thread(target=self.agent.run, args=(text, ctx, self.emit), daemon=True)
                 self.worker.start()
         else:
@@ -66,6 +67,7 @@ class Daemon:
         for line in inp:
             if not self.handle(line):
                 break
+        self.agent.stop.set()  # quit or stdin closed (the app died): stop before the next action
         if self.worker is not None:
             self.worker.join(timeout=5)
 

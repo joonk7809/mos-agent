@@ -25,7 +25,7 @@ MAX_TURNS = 40
 # prunes, so the local server's prefix (KV) cache is reused and each step only reads the new tokens.
 PRUNE_AT = 4           # when this many screenshots are in the history...
 KEEP_SCREENSHOTS = 1   # ...keep only the newest this many
-REPEAT_LIMIT = 3       # the same call with the same args this many times in a row ends the task
+REPEAT_LIMIT = 3       # the same reply (same calls, same args) this many turns in a row ends the task
 
 SYSTEM = """You are Dot, an assistant that runs locally on the user's Mac and can operate it.
 You can answer questions directly, or act using tools: shell, files, AppleScript, opening apps and URLs,
@@ -90,8 +90,21 @@ class Agent:
 
     def run(self, task: str, context: dict[str, Any] | None = None,
             on_event: Callable[[dict[str, Any]], None] = lambda e: None) -> Outcome:
-        self.stop.clear()
+        """Run one task. Callers clear `stop` before starting it (so a Stop sent right away isn't lost)."""
         tid = uuid.uuid4().hex[:12]
+        try:
+            return self._run(tid, task, context, on_event)
+        except Exception as e:  # noqa: BLE001 - any failure ends the task with an event, never a silent hang
+            text = f"Agent failed: {type(e).__name__}: {e}"
+            try:
+                self.log.write(tid, "end", status="error", text=text)
+            except Exception:  # noqa: BLE001,S110 - the log itself may be what failed
+                pass
+            on_event({"type": "done", "status": "error", "text": text})
+            return Outcome("error", text, 0)
+
+    def _run(self, tid: str, task: str, context: dict[str, Any] | None,
+             on_event: Callable[[dict[str, Any]], None]) -> Outcome:
         ctx = "".join(f"\n{k}: {v}" for k, v in (context or {}).items() if v)
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": SYSTEM.format(today=dt.date.today().isoformat(),
@@ -123,16 +136,15 @@ class Agent:
                 return end("answered", reply.content.strip(), turn)
             if self.stop.is_set():
                 return end("stopped", "Stopped.", turn)
+            sig = json.dumps([[c.name, c.arguments] for c in reply.tool_calls], sort_keys=True, default=str)
+            repeats = repeats + 1 if sig == last_sig else 1
+            last_sig = sig
+            if repeats >= REPEAT_LIMIT:
+                return end("stuck", f"Stopped: the same actions came back {REPEAT_LIMIT} turns in a row.", turn)
             images = []
             for c in reply.tool_calls:
                 if self.stop.is_set():
                     return end("stopped", "Stopped.", turn)
-                sig = c.name + json.dumps(c.arguments, sort_keys=True)
-                repeats = repeats + 1 if sig == last_sig else 1
-                last_sig = sig
-                if repeats >= REPEAT_LIMIT:
-                    return end("stuck", f"Stopped: repeated {c.name} {REPEAT_LIMIT} times with the same arguments.",
-                               turn)
                 on_event({"type": "tool", "name": c.name, "args": c.arguments})
                 t1 = time.monotonic()
                 if c.parse_error:

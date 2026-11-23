@@ -13,7 +13,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from dot import daemon, loop, model, stats
-from dot.desktop import Element, Shot, key_applescript, to_points
+from dot.desktop import Element, Shot, key_applescript, to_points, utf16_chunks
 from dot.model import Reply, ToolCall, parse_message
 from dot.tools import SCHEMAS, Tools
 
@@ -53,8 +53,8 @@ class FakeDesktop:
         self.actions.append(("screenshot", window))
         return Shot(b"\x89PNG", 640, 400, 1280, 800, origin_x=100 if window else 0, origin_y=50 if window else 0)
 
-    def elements(self, limit: int = 150) -> list[Element]:
-        return self.els
+    def elements(self, limit: int = 150, filter: str = "") -> list[Element]:
+        return [e for e in self.els if filter.lower() in (e.title + " " + e.role).lower()]
 
     def click(self, x: float, y: float, button: str = "left", count: int = 1) -> None:
         self.actions.append(("click", x, y, button, count))
@@ -145,6 +145,24 @@ def test_stop_between_calls_in_one_reply(tmp_path: Any) -> None:
 def test_repeat_guard(tmp_path: Any) -> None:
     a, _ = agent([reply(call("run_shell", i, command="ls")) for i in range(5)], tmp_path)
     assert a.run("t").status == "stuck"
+
+
+def test_same_action_several_times_in_one_reply_is_fine(tmp_path: Any) -> None:
+    d = FakeDesktop()
+    a, _ = agent([reply(*[call("key", i, combo="tab") for i in range(4)]), reply(content="ok")], tmp_path, d)
+    assert a.run("t").status == "answered"
+    assert d.actions == [("key", "tab")] * 4
+
+
+def test_any_failure_ends_with_done_event(tmp_path: Any) -> None:
+    class BadLog(loop.ActionLog):
+        def write(self, *a: Any, **k: Any) -> None:
+            raise OSError("disk full")
+    evs: list[dict[str, Any]] = []
+    a = loop.Agent(ScriptedModel([reply(content="x")]), Tools(None, run=fake_run), BadLog(str(tmp_path)))
+    out = a.run("t", on_event=evs.append)
+    assert out.status == "error" and "disk full" in out.text
+    assert evs[-1]["type"] == "done" and evs[-1]["status"] == "error"
 
 
 def test_max_turns(tmp_path: Any) -> None:
@@ -262,7 +280,23 @@ def test_to_points_always_lands_inside_the_captured_area(x: float, y: float, w: 
     assert 10.0 <= px <= 1522.0 and 20.0 <= py <= 1002.0
 
 
+def test_nan_coordinates_rejected() -> None:
+    with pytest.raises(ValueError):
+        to_points(float("nan"), 1, Shot(b"", 10, 10, 10, 10))
+    t = Tools(FakeDesktop(), run=fake_run)
+    t.call("screenshot", {})
+    assert t.call("click", {"x": float("inf"), "y": 1}).error
+
+
+@given(st.text(max_size=60))
+def test_utf16_chunks_roundtrip_and_fit(text: str) -> None:
+    chunks = utf16_chunks(text)
+    assert "".join(chunks) == text
+    assert all(0 < len(c.encode("utf-16-le")) // 2 <= 16 for c in chunks)
+
+
 def test_key_applescript() -> None:
+    assert key_applescript("cmd++") == 'tell application "System Events" to keystroke "+" using {command down}'
     assert key_applescript("cmd+shift+t") == \
         'tell application "System Events" to keystroke "t" using {command down, shift down}'
     assert key_applescript("enter") == 'tell application "System Events" to key code 36'
@@ -278,11 +312,14 @@ def test_parse_message_handles_dict_and_bad_arguments() -> None:
     r = parse_message({"content": None, "tool_calls": [
         {"id": "a", "function": {"name": "click", "arguments": {"x": 1, "y": 2}}},
         {"function": {"name": "key", "arguments": "{bad"}},
-        {"id": "c", "function": {"name": "key", "arguments": "[1]"}}]})
+        {"id": "c", "function": {"name": "key", "arguments": "[1]"}},
+        {"id": "d", "function": {"name": "key", "arguments": [1]}}]})
     assert r.tool_calls[0].arguments == {"x": 1, "y": 2} and r.tool_calls[0].parse_error is None
     assert r.tool_calls[1].parse_error and r.tool_calls[1].id == "call_1"
-    assert r.tool_calls[2].parse_error
-    assert len(r.message["tool_calls"]) == 3
+    assert r.tool_calls[2].parse_error and r.tool_calls[3].parse_error
+    assert len(r.message["tool_calls"]) == 4
+    # Malformed arguments are not echoed back into the history (servers would reject the next request).
+    assert r.message["tool_calls"][1]["function"]["arguments"] == "{}"
 
 
 @given(st.dictionaries(st.text(max_size=5), st.one_of(st.none(), st.text(max_size=5), st.integers(),
@@ -343,4 +380,19 @@ def test_daemon_stop_message_sets_stop(tmp_path: Any) -> None:
     d = daemon.Daemon(a, io.StringIO())
     d.handle('{"type":"stop"}')
     assert a.stop.is_set()
-    time.sleep(0)
+
+
+def test_daemon_stdin_eof_stops_agent(tmp_path: Any) -> None:
+    started = threading.Event()
+
+    def slow(n: int) -> None:
+        started.set()
+        time.sleep(0.3)
+    d = FakeDesktop()
+    a, _ = agent([reply(call("key", 0, combo="enter")), reply(content="x")], tmp_path, d, on_call=slow)
+    dm = daemon.Daemon(a, io.StringIO())
+    dm.serve(io.StringIO('{"type":"ask","text":"go"}\n'))  # EOF right after the ask
+    assert a.stop.is_set()
+    assert dm.worker is not None
+    dm.worker.join(5)
+    assert d.actions == []  # the pending key press never ran

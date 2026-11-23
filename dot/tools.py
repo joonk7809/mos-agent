@@ -148,9 +148,7 @@ class Tools:
         return to_points(float(x), float(y), self.last_shot)
 
     def t_ui_elements(self, filter: str = "") -> ToolResult:
-        els = self._desk().elements()
-        if filter:
-            els = [e for e in els if filter.lower() in (e.title + " " + e.role).lower()]
+        els = self._desk().elements(filter=filter)
         self.last_elements = els
         if not els:
             return ToolResult("no labelled elements found; use screenshot instead")

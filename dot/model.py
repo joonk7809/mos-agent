@@ -51,21 +51,25 @@ def parse_message(msg: dict[str, Any]) -> Reply:
         err = None
         if isinstance(raw, dict):  # Ollama sometimes sends a dict already
             args, raw = raw, json.dumps(raw)
-        else:
+        elif not isinstance(raw, str):
+            err, raw = "arguments must be a JSON object", json.dumps(raw, default=str)
+        if err is None and not args:
             try:
                 parsed = json.loads(raw) if raw else {}
                 if isinstance(parsed, dict):
                     args = parsed
                 else:
                     err = "arguments must be a JSON object"
-            except json.JSONDecodeError as e:
+            except (json.JSONDecodeError, TypeError) as e:
                 err = f"arguments are not valid JSON: {e}"
         calls.append(ToolCall(id=tc.get("id") or f"call_{i}", name=str(fn.get("name", "")),
                               arguments=args, raw_arguments=raw, parse_error=err))
     out_msg: dict[str, Any] = {"role": "assistant", "content": content}
     if calls:
         out_msg["tool_calls"] = [{"id": c.id, "type": "function",
-                                  "function": {"name": c.name, "arguments": c.raw_arguments or "{}"}}
+                                  # Bad arguments go back as "{}": servers re-parse history and would reject them.
+                                  "function": {"name": c.name,
+                                               "arguments": "{}" if c.parse_error else (c.raw_arguments or "{}")}}
                                  for c in calls]
     return Reply(content=content, tool_calls=calls, message=out_msg)
 

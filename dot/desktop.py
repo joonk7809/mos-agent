@@ -6,6 +6,7 @@ them to screen points. Set DOT_COORDS=norm1000 if the model turns out to emit 0.
 """
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import tempfile
@@ -41,7 +42,7 @@ class Element:
 
 class Desktop(Protocol):
     def screenshot(self, window: bool = False) -> Shot: ...
-    def elements(self, limit: int = 150) -> list[Element]: ...
+    def elements(self, limit: int = 150, filter: str = "") -> list[Element]: ...
     def click(self, x: float, y: float, button: str = "left", count: int = 1) -> None: ...
     def move(self, x: float, y: float) -> None: ...
     def drag(self, x1: float, y1: float, x2: float, y2: float) -> None: ...
@@ -52,6 +53,8 @@ class Desktop(Protocol):
 
 def to_points(x: float, y: float, shot: Shot, space: str | None = None) -> tuple[float, float]:
     """Map model coordinates (image pixels, or 0..999 when space == "norm1000") to screen points, clamped."""
+    if not (math.isfinite(x) and math.isfinite(y)):
+        raise ValueError(f"coordinates must be finite numbers, got ({x}, {y})")
     space = space or os.environ.get("DOT_COORDS", "pixels")
     if space == "norm1000":
         fx, fy = x / 999.0, y / 999.0
@@ -75,7 +78,12 @@ MODIFIERS = {"cmd": "command down", "command": "command down", "ctrl": "control 
 
 def key_applescript(combo: str) -> str:
     """AppleScript for a key combo. Raises ValueError on an unknown key."""
-    parts = [p.strip().lower() for p in combo.split("+") if p.strip()]
+    combo = combo.strip().lower()
+    if combo.endswith("++"):  # "cmd++" = cmd and the plus key
+        combo = combo[:-2] + "+plus"
+    parts = [p.strip() for p in combo.split("+") if p.strip()]
+    if parts and parts[-1] == "plus":
+        parts[-1] = "+"
     if not parts:
         raise ValueError("empty key combo")
     *mods, key = parts
@@ -91,6 +99,22 @@ def key_applescript(combo: str) -> str:
         esc = key.replace("\\", "\\\\").replace('"', '\\"')
         return f'tell application "System Events" to keystroke "{esc}"{suffix}'
     raise ValueError(f"unknown key {key!r}")
+
+
+def utf16_chunks(text: str, units: int = 16) -> list[str]:
+    """Split text into chunks of at most `units` UTF-16 code units (CGEvent's limit is ~20), never
+    splitting a character."""
+    out, cur, n = [], "", 0
+    for ch in text:
+        w = 2 if ord(ch) > 0xFFFF else 1
+        if n + w > units and cur:
+            out.append(cur)
+            cur, n = "", 0
+        cur += ch
+        n += w
+    if cur:
+        out.append(cur)
+    return out
 
 
 class MacDesktop:  # pragma: no cover - needs macOS
@@ -140,8 +164,9 @@ class MacDesktop:  # pragma: no cover - needs macOS
                 png = f.read()
         return Shot(png=png, width=w, height=h, screen_w=sw, screen_h=sh, origin_x=ox, origin_y=oy)
 
-    def elements(self, limit: int = 150) -> list[Element]:
-        """Walk the frontmost window's accessibility tree; keep elements with a label and a size."""
+    def elements(self, limit: int = 150, filter: str = "") -> list[Element]:
+        """Walk the frontmost window's accessibility tree; keep elements with a label and a size
+        (and, with `filter`, whose label or role contains it)."""
         import ApplicationServices as AS
         from AppKit import NSWorkspace
         app = NSWorkspace.sharedWorkspace().frontmostApplication()
@@ -163,6 +188,8 @@ class MacDesktop:  # pragma: no cover - needs macOS
             label = next((str(v) for v in (attr(el, "AXTitle"), attr(el, "AXDescription"), attr(el, "AXValue"),
                                            attr(el, "AXPlaceholderValue")) if v not in (None, "")), "")
             pos, size = attr(el, "AXPosition"), attr(el, "AXSize")
+            if filter and filter.lower() not in (label + " " + role).lower():
+                label = ""
             if label and pos is not None and size is not None:
                 _, p = AS.AXValueGetValue(pos, AS.kAXValueCGPointType, None)
                 _, z = AS.AXValueGetValue(size, AS.kAXValueCGSizeType, None)
@@ -209,8 +236,7 @@ class MacDesktop:  # pragma: no cover - needs macOS
 
     def type_text(self, text: str) -> None:
         Q = self.Q
-        for i in range(0, len(text), 16):  # CGEvent carries at most ~20 UTF-16 units per event
-            chunk = text[i:i + 16]
+        for chunk in utf16_chunks(text):
             for down in (True, False):
                 ev = Q.CGEventCreateKeyboardEvent(None, 0, down)
                 Q.CGEventKeyboardSetUnicodeString(ev, len(chunk.encode("utf-16-le")) // 2, chunk)
@@ -218,4 +244,6 @@ class MacDesktop:  # pragma: no cover - needs macOS
             time.sleep(0.01)
 
     def key(self, combo: str) -> None:
-        subprocess.run(["osascript", "-e", key_applescript(combo)], check=True, capture_output=True, timeout=20)
+        p = subprocess.run(["osascript", "-e", key_applescript(combo)], capture_output=True, text=True, timeout=20)
+        if p.returncode != 0:
+            raise RuntimeError(f"osascript: {p.stderr.strip() or p.returncode} (does Dot have Accessibility?)")

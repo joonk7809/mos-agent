@@ -1,6 +1,9 @@
 // Dot: an always-on black dot in the top-right corner. Option+Space opens a prompt bar;
 // the request goes to the local agent (python -m dot --daemon) over stdin/stdout.
-// Esc while running = Stop (halts before the agent's next action). Esc when idle = collapse.
+// On submit the bar collapses back to the dot and focus returns to your app, so the agent's typing
+// and clicks land there (and not on Dot). The dot turns grey while running; the answer pops up when done.
+// Stop (halts before the agent's next action): Option+Esc anywhere, Option+Space while running,
+// a click on the grey dot, or Esc/Stop in the bar. Esc when idle = collapse.
 // Build: dot/mac/build.sh  (needs Xcode command line tools: xcode-select --install)
 import AppKit
 import Carbon
@@ -29,6 +32,7 @@ final class DotView: NSView {
 final class Agent {
     private var proc: Process?
     private var stdin: FileHandle?
+    var alive: Bool { proc?.isRunning ?? false }
     private var buffer = Data()
     var onEvent: (([String: Any]) -> Void)?
 
@@ -43,10 +47,16 @@ final class Agent {
         let inPipe = Pipe(), outPipe = Pipe()
         p.standardInput = inPipe
         p.standardOutput = outPipe
-        p.standardError = FileHandle.nullDevice
+        // Daemon stderr (Python tracebacks, a missing module) goes to a log you can read.
+        let logDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Dot")
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        let errURL = logDir.appendingPathComponent("daemon.err")
+        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+        p.standardError = (try? FileHandle(forWritingTo: errURL)) ?? FileHandle.nullDevice
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
-            guard let self = self, !d.isEmpty else { return }
+            if d.isEmpty { h.readabilityHandler = nil; return }  // EOF: stop polling
+            guard let self = self else { return }
             self.buffer.append(d)
             while let nl = self.buffer.firstIndex(of: 0x0A) {
                 let line = self.buffer.subdata(in: self.buffer.startIndex..<nl)
@@ -57,7 +67,10 @@ final class Agent {
             }
         }
         p.terminationHandler = { [weak self] _ in
-            DispatchQueue.main.async { self?.onEvent?(["type": "error", "text": "agent process exited"]) }
+            DispatchQueue.main.async {
+                self?.stdin = nil
+                self?.onEvent?(["type": "error", "text": "agent process exited (see ~/Library/Logs/Dot/daemon.err)"])
+            }
         }
         do {
             try p.run()
@@ -69,9 +82,9 @@ final class Agent {
     }
 
     func send(_ msg: [String: Any]) {
-        guard let s = stdin, let d = try? JSONSerialization.data(withJSONObject: msg) else { return }
-        s.write(d)
-        s.write("\n".data(using: .utf8)!)
+        guard alive, let s = stdin, var d = try? JSONSerialization.data(withJSONObject: msg) else { return }
+        d.append(0x0A)
+        do { try s.write(contentsOf: d) } catch { stdin = nil }  // EPIPE: the daemon is gone
     }
 
     func stopProcess() {
@@ -151,7 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         let scroll = NSScrollView(frame: NSRect(x: 14, y: 12, width: barSize.width - 28, height: barSize.height - 66))
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
-        output = NSTextView(frame: scroll.bounds)
+        output = NSTextView(frame: NSRect(origin: .zero, size: scroll.contentSize))
+        output.isVerticallyResizable = true
+        output.isHorizontallyResizable = false
+        output.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        output.textContainer?.widthTracksTextView = true
         output.isEditable = false
         output.drawsBackground = false
         output.font = .systemFont(ofSize: 13)
@@ -177,22 +194,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         panel.orderFrontRegardless()
     }
 
-    func expand() {
-        let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? ""
-        context = ["app": front]
+    var previousApp: NSRunningApplication?
+
+    func expand(focus: Bool = true) {
+        if focus {
+            previousApp = NSWorkspace.shared.frontmostApplication
+            context = ["app": previousApp?.localizedName ?? ""]
+        }
         expanded = true
         let s = screenFrame()
         panel.setFrame(NSRect(x: s.maxX - barSize.width - margin, y: s.maxY - barSize.height - margin,
                               width: barSize.width, height: barSize.height), display: true)
         bar.isHidden = false
         dot.isHidden = true
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(input)
+        if focus {
+            panel.makeKeyAndOrderFront(nil)
+            panel.makeFirstResponder(input)
+        } else {
+            panel.orderFrontRegardless()  // show the answer without taking the keyboard
+        }
     }
 
     var context: [String: String] = [:]
 
-    func toggle() { expanded ? collapse() : expand() }
+    func toggle() {
+        if running { stop(); return }
+        expanded ? collapse() : expand()
+    }
 
     func escape() {
         if running { stop() } else { collapse() }
@@ -204,11 +232,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
         guard !text.isEmpty, !running else { return }
         output.string = "› \(text)\n"
         input.stringValue = ""
+        guard agent.alive else { append("⚠︎ agent isn't running (see ~/Library/Logs/Dot/daemon.err)"); return }
         setRunning(true)
         agent.send(["type": "ask", "text": text, "context": context])
+        // Get out of the way: collapse to the dot and hand the keyboard back to the user's app.
+        collapse()
+        panel.resignKey()
+        previousApp?.activate(options: [])
     }
 
     @objc func stop() {
+        guard running else { return }
         agent.send(["type": "stop"])
         append("Stopping before the next action…")
     }
@@ -239,25 +273,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
             setRunning(false)
             let status = ev["status"] as? String ?? ""
             append("\n" + (ev["text"] as? String ?? "") + (status == "answered" ? "" : "  [\(status)]"))
-            if !expanded { dot.color = status == "answered" ? .black : .systemRed }
+            if status != "answered" { dot.color = .systemRed }
+            if !expanded { expand(focus: false) }
         case "error":
             setRunning(false)
             append("⚠︎ \(ev["text"] as? String ?? "error")")
             dot.color = .systemRed
+            if !expanded { expand(focus: false) }
         default:
             break
         }
     }
 
-    // MARK: hotkey (Option+Space)
+    // MARK: hotkeys: Option+Space = open/close (Stop while running), Option+Esc = Stop
+    var stopKeyRef: EventHotKeyRef?
+
     func registerHotKey() {
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, _, _ -> OSStatus in
-            DispatchQueue.main.async { AppDelegate.shared?.toggle() }
+        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
+            var hk = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                              nil, MemoryLayout<EventHotKeyID>.size, nil, &hk)
+            let which = hk.id
+            DispatchQueue.main.async {
+                if which == 2 { AppDelegate.shared?.stop() } else { AppDelegate.shared?.toggle() }
+            }
             return noErr
         }, 1, &spec, nil, nil)
-        let id = EventHotKeyID(signature: OSType(0x444F_5421), id: 1)  // "DOT!"
-        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        let sig = OSType(0x444F_5421)  // "DOT!"
+        RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), EventHotKeyID(signature: sig, id: 1),
+                            GetApplicationEventTarget(), 0, &hotKeyRef)
+        RegisterEventHotKey(UInt32(kVK_Escape), UInt32(optionKey), EventHotKeyID(signature: sig, id: 2),
+                            GetApplicationEventTarget(), 0, &stopKeyRef)
     }
 }
 
